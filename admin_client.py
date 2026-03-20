@@ -270,19 +270,21 @@ class AdminWindow(QMainWindow):
             prefixes = [f"mac/{client_name}/"]
         else: prefixes = [f"key/{sel_type}/"]
 
-        # 确定状态目录
-        stats = ["available", "used"]
-        if "待使用" in sel_stat: stats = ["available"]
-        elif "已使用" in sel_stat: stats = ["used"]
+        # 状态关键词过滤
+        stat_keywords = []
+        if "待使用" in sel_stat: stat_keywords = ["available"]
+        elif "已使用" in sel_stat: stat_keywords = ["used"]
+        else: stat_keywords = ["available", "used"]
 
         for p in prefixes:
-            for s in stats:
-                full_path = f"{p}{s}/"
-                try:
-                    objs = self.db.client.list_objects(self.db.bucket, prefix=full_path, recursive=True)
-                    for obj in objs:
+            try:
+                # 递归列出前缀下所有对象（含客户子目录）
+                objs = self.db.client.list_objects(self.db.bucket, prefix=p, recursive=True)
+                for obj in objs:
+                    # 按状态过滤：路径中必须包含 available 或 used
+                    if any(f"/{kw}/" in obj.object_name for kw in stat_keywords):
                         self._add_row(obj.object_name)
-                except: continue
+            except: continue
 
     def _add_row(self, path):
         # 路径格式:
