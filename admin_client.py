@@ -314,14 +314,27 @@ class AdminWindow(QMainWindow):
         self.trace_result_table.setRowCount(0)
         self.raw_json_view.clear()
 
-        object_path = f"sn_record/{sn}.json"
+        # 兼容两种路径：新版直接写 sn_record/{sn}.json，旧版走 available 目录
+        candidate_paths = [
+            f"sn_record/{sn}.json",
+            f"sn_record/available/{sn}.json",
+            f"sn_record/used/{sn}.json",
+        ]
         
+        data = None
         try:
-            # 从 MinIO 获取归档文件
-            response = self.db.client.get_object(self.db.bucket, object_path)
-            data = json.load(response)
-            response.close()
-            response.release_conn()
+            for object_path in candidate_paths:
+                try:
+                    response = self.db.client.get_object(self.db.bucket, object_path)
+                    data = json.load(response)
+                    response.close()
+                    response.release_conn()
+                    break
+                except:
+                    continue
+            
+            if data is None:
+                raise FileNotFoundError("未找到")
 
             # 显示原始 JSON
             self.raw_json_view.setPlainText(json.dumps(data, indent=4, ensure_ascii=False))
