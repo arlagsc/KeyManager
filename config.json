@@ -1,5 +1,6 @@
 {
     "key_types": ["HDCP1.4 5586 dev", "HDCP2.2 5586 dev","HDCP1.4 5586 prod", "HDCP2.2 5586 prod", "ULPK 5586F dev", "ULPK 5586F prod", "ULPK 5586L dev", "ULPK 5586L prod"],
+    "mac_clients": ["Vizio", "Onn"],
     "minio": {
         "endpoint": "172.16.9.28:9000",
         "access_key": "admin",

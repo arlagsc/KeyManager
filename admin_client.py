@@ -65,6 +65,14 @@ class AdminWindow(QMainWindow):
 
         # --- MAC 批量导入区 ---
         layout.addWidget(QLabel("<b>[1] MAC 地址段生成</b>"))
+        
+        mac_client_layout = QHBoxLayout()
+        mac_client_layout.addWidget(QLabel("客户:"))
+        self.mac_client_select = QComboBox()
+        self.mac_client_select.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        mac_client_layout.addWidget(self.mac_client_select, 1)
+        layout.addLayout(mac_client_layout)
+        
         mac_layout = QHBoxLayout()
         self.start_mac_input = QLineEdit()
         self.start_mac_input.setPlaceholderText("起始 MAC (支持 : 或 -)")
@@ -112,7 +120,8 @@ class AdminWindow(QMainWindow):
         
         filter_bar = QHBoxLayout()
         self.type_filter = QComboBox()
-        self.type_filter.addItems(["全部", "MAC"])
+        mac_clients = self.config.get("mac_clients", ["Vizio", "Onn"])
+        self.type_filter.addItems(["全部", "MAC (全部)"] + [f"MAC ({c})" for c in mac_clients])
         self.type_filter.addItems(self.config.get("key_types", []))
         
         self.status_filter = QComboBox()
@@ -182,6 +191,7 @@ class AdminWindow(QMainWindow):
     def handle_batch_mac_upload(self):
         raw_mac = self.start_mac_input.text().strip()
         count = self.mac_count_input.value()
+        client_name = self.mac_client_select.currentText().strip().lower()
         try:
             std_mac = self.normalize_mac(raw_mac)
             mac_base = int(std_mac.replace("-", ""), 16)
@@ -189,9 +199,9 @@ class AdminWindow(QMainWindow):
             for i in range(count):
                 new_hex = hex(mac_base + i)[2:].zfill(12).upper()
                 final_mac = "-".join(new_hex[j:j+2] for j in range(0, 12, 2))
-                success, _ = self.db.upload_new_resource("mac", final_mac)
+                success, _ = self.db.upload_new_resource(f"mac/{client_name}", final_mac)
                 if success: success_count += 1
-            QMessageBox.information(self, "完成", f"成功导入 {success_count} 条 MAC")
+            QMessageBox.information(self, "完成", f"成功导入 {success_count} 条 MAC ({client_name})")
         except Exception as e:
             QMessageBox.critical(self, "错误", f"MAC 处理失败: {str(e)}")
 
@@ -243,7 +253,10 @@ class AdminWindow(QMainWindow):
         # 确定前缀
         prefixes = []
         if sel_type == "全部": prefixes = ["mac/", "key/"]
-        elif sel_type == "MAC": prefixes = ["mac/"]
+        elif sel_type == "MAC (全部)": prefixes = ["mac/"]
+        elif sel_type.startswith("MAC ("):
+            client_name = sel_type.replace("MAC (", "").replace(")", "").strip().lower()
+            prefixes = [f"mac/{client_name}/"]
         else: prefixes = [f"key/{sel_type}/"]
 
         # 确定状态目录

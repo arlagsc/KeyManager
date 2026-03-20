@@ -44,20 +44,21 @@ class BurnWorker(QThread):
             for task_path in self.task_list:
                 cmd_type = task_path.split('/')[-1]
 
-                # MAC 任务不需要从 MinIO 读二进制文件
-                if cmd_type.upper() == "MAC":
+                # MAC 任务：路径以 mac/ 开头
+                if task_path.startswith("mac/"):
                     res_id = self.db.fetch_and_lock(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
-                    self.log_signal.emit(f"[MAC] 资源: {res_id}", "#3498db")
+                    mac_label = f"MAC({cmd_type})"
+                    self.log_signal.emit(f"[{mac_label}] 资源: {res_id}", "#3498db")
                     cmd = self.protocol.pack_mac_command(res_id)
-                    self.log_signal.emit(f"[MAC] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
+                    self.log_signal.emit(f"[{mac_label}] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
                         max_retries=10, ack_delay=0.5)
                     if not ok:
-                        self.log_signal.emit(f"[MAC] 失败详情: ack={ack}, raw={msg}", "#e74c3c")
+                        self.log_signal.emit(f"[{mac_label}] 失败详情: ack={ack}, raw={msg}", "#e74c3c")
                     success = ok
 
                 elif "HDCP" in cmd_type.upper():
@@ -290,9 +291,19 @@ class OfflineProdWindow(QMainWindow):
         # 2. 任务勾选
         task_group = QGroupBox("2. 烧录任务")
         task_layout = QVBoxLayout()
+        
+        # MAC 行：勾选 + 客户选择
+        mac_row = QHBoxLayout()
         self.check_mac = QCheckBox("烧录 MAC")
         self.check_mac.setChecked(True)
-        task_layout.addWidget(self.check_mac)
+        self.mac_client_combo = QComboBox()
+        self.mac_client_combo.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        mac_row.addWidget(self.check_mac)
+        mac_row.addWidget(QLabel("客户:"))
+        mac_row.addWidget(self.mac_client_combo)
+        mac_row.addStretch()
+        task_layout.addLayout(mac_row)
+        
         self.key_checks = {}
         for kt in self.config.get("key_types", []):
             cb = QCheckBox(f"烧录 {kt}")
@@ -460,8 +471,9 @@ class OfflineProdWindow(QMainWindow):
 
         # 3. 任务列表构建
         tasks = []
-        if self.check_mac.isChecked(): 
-            tasks.append("mac")
+        if self.check_mac.isChecked():
+            client_name = self.mac_client_combo.currentText().strip().lower()
+            tasks.append(f"mac/{client_name}")
         for kt, cb in self.key_checks.items():
             if cb.isChecked(): 
                 tasks.append(f"key/{kt}")
