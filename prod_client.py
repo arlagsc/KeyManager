@@ -51,7 +51,9 @@ class BurnWorker(QThread):
                     self.log_signal.emit(f"[MAC] 资源: {res_id}", "#3498db")
                     cmd = self.protocol.pack_mac_command(res_id)
                     self.log_signal.emit(f"[MAC] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
-                    success, msg = self.protocol.send_raw(cmd, monitor_signal=self.monitor_signal)
+                    ok, ack, msg = self.protocol.send_and_wait_ack(
+                        cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=0.5)
+                    success = ok
 
                 elif "HDCP" in cmd_type.upper():
                     res_id = self.db.fetch_and_lock(task_path)
@@ -97,7 +99,8 @@ class BurnWorker(QThread):
             self.log_signal.emit(f"[SN] 正在写入 SN: {self.sn}", "#3498db")
             sn_cmd = self.protocol.pack_sn_command(self.sn)
             self.log_signal.emit(f"[SN] 发送: {sn_cmd.hex(' ').upper()}", "#9b59b6")
-            sn_ok, sn_msg = self.protocol.send_raw(sn_cmd, monitor_signal=self.monitor_signal)
+            sn_ok, sn_ack, sn_msg = self.protocol.send_and_wait_ack(
+                sn_cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=0.5)
             if not sn_ok:
                 self.result_signal.emit(False, f"SN 写入失败: {sn_msg}")
                 return
