@@ -124,15 +124,26 @@ class BurnWorker(QThread):
     def process_hdcp_burn(self, name, type_code, data):
         """
         HDCP 分包烧录，逐包等待 ACK，与 MFC Timer 状态机逻辑一致。
+        
         HDCP1.4: block_size=120, type_code=0xE3
+          MFC 根据实际文件大小动态计算包数，512字节文件只取前304字节。
+          新版 burnHDCP() 支持任意长度，按 HDCP14_SIZE=120 分包。
+          
         HDCP2.2: block_size=128, type_code=0xE4
+          MFC 固定读取 1044 字节，BLOCK_NO=9, BLOCK_SIZE=128。
         """
         if type_code == 0xE3:
             block_size = self.protocol.HDCP14_BLOCK_SIZE  # 120
+            # MFC: 512字节的bin文件只取前304字节
+            if len(data) == 512:
+                data = data[:304]
+            total_blocks = (len(data) + block_size - 1) // block_size
         else:
             block_size = self.protocol.HDCP22_BLOCK_SIZE  # 128
+            # MFC: 固定取前 1044 字节，固定 9 包
+            data = data[:self.protocol.HDCP22_TOTAL_SIZE]
+            total_blocks = self.protocol.HDCP22_BLOCK_NO  # 9
 
-        total_blocks = (len(data) + block_size - 1) // block_size
         full_crc = self.protocol.calculate_crc(data)
 
         # 1. 发送 Header 包并等待 ACK
@@ -149,7 +160,11 @@ class BurnWorker(QThread):
         # 2. 逐包发送数据，每包等待 ACK (与 MFC 的 m_step 状态机一致)
         for b_id in range(1, total_blocks + 1):
             start = (b_id - 1) * block_size
-            end = min(start + block_size, len(data))
+            # 最后一包可能不足 block_size
+            if b_id == total_blocks:
+                end = len(data)
+            else:
+                end = start + block_size
             chunk = data[start:end]
 
             chunk_cmd = self.protocol.pack_hdcp_chunk(type_code, b_id, chunk)

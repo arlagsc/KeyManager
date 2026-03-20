@@ -89,12 +89,17 @@ class TVSerialProtocol:
     def build_hdcp_frame(self, payload: bytes):
         """
         构建 HDCP 专用帧 (cmd=0xFE)。
-        帧格式: 07 51 01 FE 00 [帧总长度] [payload] [CRC16]
+        帧格式: 07 51 01 FE 00 [第6字节] [payload] [CRC16]
         
-        MFC 参考:
-          Header: "07 51 01 FE 00 0F E3 00 03 00 78 [H] [L] 00 00" → clrCRC
-          数据包: "07 51 01 FE 00 [SIZE+10] E3 [id] [data] 00 00" → clrCRC
-        第6字节 = 帧总长度 = 6 + len(payload) + 2
+        MFC 参考 (Header):
+          "07 51 01 FE 00 0F E3 00 03 00 78 [H] [L] 00 00" → clrCRC
+          clrCRC 替换最后2字节为真实CRC，最终帧 15 字节，第6字节=0x0F=15
+        MFC 参考 (数据包):
+          "07 51 01 FE 00 [SIZE+10] E3 01 [120字节] 00 00" → clrCRC
+          SIZE+10 = 120+10 = 130, 帧总长度 = 6+1+1+120+2 = 130
+        
+        结论: 第6字节 = 帧总长度 = 6(头) + len(payload) + 2(CRC)
+        payload 不含尾部 00 00 占位（那是 MFC clrCRC 的占位，这里直接追加真实 CRC）
         """
         total_len = 6 + len(payload) + 2
         frame_no_crc = bytes([0x07, 0x51, 0x01, 0xFE, 0x00, total_len]) + payload
@@ -135,11 +140,12 @@ class TVSerialProtocol:
         """
         HDCP Header 包。
         MFC: "07 51 01 FE 00 0F [type] 00 [blocks] [sizeH] [sizeL] [crcH] [crcL] 00 00" → clrCRC
+        末尾 00 00 是 MFC clrCRC 的占位符，会被替换为真实 CRC。
+        这里 payload 不含占位符，build_hdcp_frame 会追加真实 CRC。
         """
         payload = bytes([hdcp_type, 0x00, total_blocks]) + \
                   struct.pack(">H", block_size) + \
-                  struct.pack(">H", data_crc) + \
-                  b"\x00\x00"
+                  struct.pack(">H", data_crc)
         return self.build_hdcp_frame(payload)
 
     def pack_hdcp_chunk(self, hdcp_type, block_id, chunk_data):
