@@ -54,7 +54,9 @@ class BurnWorker(QThread):
                     self.log_signal.emit(f"[MAC] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                        max_retries=5, ack_delay=0.5)
+                        max_retries=10, ack_delay=0.5)
+                    if not ok:
+                        self.log_signal.emit(f"[MAC] 失败详情: ack={ack}, raw={msg}", "#e74c3c")
                     success = ok
 
                 elif "HDCP" in cmd_type.upper():
