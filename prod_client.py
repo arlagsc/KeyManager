@@ -81,10 +81,11 @@ class BurnWorker(QThread):
                     uid = self.extract_uid(res_id)
                     # 5586 ULPK: cmd_id=0xD1, payload=[UID 4字节]+[160字节数据]
                     cmd = self.protocol.pack_ulpk_command(uid, raw_data)
-                    self.log_signal.emit(f"[ULPK] UID={uid}, 发送 {len(raw_data)} 字节", "#3498db")
+                    self.log_signal.emit(f"[ULPK] UID={uid}, 帧长={len(cmd)} 字节", "#3498db")
+                    self.log_signal.emit(f"[ULPK] HEX: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                        max_retries=5, ack_delay=1.0)
+                        max_retries=10, ack_delay=1.0)
                     if not ok:
                         self.result_signal.emit(False, f"{cmd_type} ULPK 烧录失败: {msg}")
                         return
