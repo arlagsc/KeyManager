@@ -251,9 +251,13 @@ class OfflineProdWindow(QMainWindow):
         self.port_combo = QComboBox()
         self.btn_refresh_port = QPushButton("刷新")
         self.btn_refresh_port.clicked.connect(self.refresh_serial_ports)
+        self.btn_toggle_port = QPushButton("打开串口")
+        self.btn_toggle_port.setStyleSheet("background-color: #2980b9; color: white;")
+        self.btn_toggle_port.clicked.connect(self.toggle_serial_port)
         hw_layout.addWidget(QLabel("端口:"))
         hw_layout.addWidget(self.port_combo, 1)
         hw_layout.addWidget(self.btn_refresh_port)
+        hw_layout.addWidget(self.btn_toggle_port)
         hw_group.setLayout(hw_layout)
         left_layout.addWidget(hw_group)
 
@@ -363,6 +367,34 @@ class OfflineProdWindow(QMainWindow):
             display_name = f"{p.device} ({p.description})"
             self.port_combo.addItem(display_name, p.device)
         self.btn_start.setEnabled(True)
+
+    def toggle_serial_port(self):
+        """打开/关闭串口"""
+        if self.protocol.ser and self.protocol.ser.is_open:
+            # 关闭串口
+            self.protocol.ser.close()
+            self.protocol.ser = None
+            self.btn_toggle_port.setText("打开串口")
+            self.btn_toggle_port.setStyleSheet("background-color: #2980b9; color: white;")
+            self.port_combo.setEnabled(True)
+            self.btn_refresh_port.setEnabled(True)
+            self.log("串口已关闭", "#e67e22")
+        else:
+            # 打开串口
+            current_port = self.port_combo.itemData(self.port_combo.currentIndex())
+            if not current_port:
+                QMessageBox.warning(self, "错误", "请先选择一个有效的串口！")
+                return
+            try:
+                self.protocol.port = current_port
+                self.protocol.ser = serial.Serial(current_port, self.protocol.baud, timeout=2)
+                self.btn_toggle_port.setText("关闭串口")
+                self.btn_toggle_port.setStyleSheet("background-color: #e74c3c; color: white;")
+                self.port_combo.setEnabled(False)
+                self.btn_refresh_port.setEnabled(False)
+                self.log(f"串口 {current_port} 已打开", "#2ecc71")
+            except Exception as e:
+                QMessageBox.critical(self, "串口错误", f"无法打开串口: {e}")
 
     def on_port_selection_changed(self, index):
         """下拉框切换时同步更新协议对象"""
