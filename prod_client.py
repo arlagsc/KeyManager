@@ -212,6 +212,31 @@ class BurnWorker(QThread):
         except:
             return "0"
 
+class SerialReaderThread(QThread):
+    """后台串口持续读取线程，串口打开期间不断接收数据"""
+    data_received = pyqtSignal(bytes)
+
+    def __init__(self, serial_obj):
+        super().__init__()
+        self.serial_obj = serial_obj
+        self._running = True
+
+    def run(self):
+        while self._running:
+            try:
+                if self.serial_obj and self.serial_obj.is_open:
+                    if self.serial_obj.in_waiting > 0:
+                        data = self.serial_obj.read(self.serial_obj.in_waiting)
+                        if data:
+                            self.data_received.emit(data)
+                time.sleep(0.05)  # 50ms 轮询间隔
+            except Exception:
+                break
+
+    def stop(self):
+        self._running = False
+        self.wait(1000)
+
 class OfflineProdWindow(QMainWindow):
     # 定义一个新的信号，用于 worker 线程向串口监控窗口发送数据
     monitor_data_signal = pyqtSignal(bytes)
@@ -233,6 +258,7 @@ class OfflineProdWindow(QMainWindow):
         
         # 绑定信号
         self.monitor_data_signal.connect(self.update_serial_monitor)
+        self.serial_reader = None
         
         self.init_ui()
 
@@ -371,6 +397,10 @@ class OfflineProdWindow(QMainWindow):
     def toggle_serial_port(self):
         """打开/关闭串口"""
         if self.protocol.ser and self.protocol.ser.is_open:
+            # 停止读取线程
+            if self.serial_reader:
+                self.serial_reader.stop()
+                self.serial_reader = None
             # 关闭串口
             self.protocol.ser.close()
             self.protocol.ser = None
@@ -388,6 +418,10 @@ class OfflineProdWindow(QMainWindow):
             try:
                 self.protocol.port = current_port
                 self.protocol.ser = serial.Serial(current_port, self.protocol.baud, timeout=2)
+                # 启动后台读取线程
+                self.serial_reader = SerialReaderThread(self.protocol.ser)
+                self.serial_reader.data_received.connect(self.update_serial_monitor)
+                self.serial_reader.start()
                 self.btn_toggle_port.setText("关闭串口")
                 self.btn_toggle_port.setStyleSheet("background-color: #e74c3c; color: white;")
                 self.port_combo.setEnabled(False)
@@ -441,6 +475,11 @@ class OfflineProdWindow(QMainWindow):
         self.sn_input.setEnabled(False)
         self.log_view.clear()
         
+        # 暂停后台串口读取线程，避免和烧录抢数据
+        if self.serial_reader:
+            self.serial_reader.stop()
+            self.serial_reader = None
+        
         self.protocol.port = current_port # 确保最新
 
         # 实例化 BurnWorker 并传入 config
@@ -461,6 +500,12 @@ class OfflineProdWindow(QMainWindow):
         self.sn_input.setEnabled(True)
         self.sn_input.clear()
         self.sn_input.setFocus()
+
+        # 恢复后台串口读取线程
+        if self.protocol.ser and self.protocol.ser.is_open and not self.serial_reader:
+            self.serial_reader = SerialReaderThread(self.protocol.ser)
+            self.serial_reader.data_received.connect(self.update_serial_monitor)
+            self.serial_reader.start()
 
         if success:
             self.log(f"\n[PASS] {msg}", "#2ecc71")
