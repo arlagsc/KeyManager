@@ -24,105 +24,154 @@ class BurnWorker(QThread):
         self.sn = sn
         self.task_list = task_list
         self.config = config
-        self.monitor_signal = None  # 用于接收 UI 传来的信号对象
+        self.monitor_signal = None
 
     def run(self):
         try:
             self.log_signal.emit(f"--- 5586 全功能烧录启动: SN {self.sn} ---", "#ffffff")
             
-            # 进入工厂模式
-            fac_cmd = bytes.fromhex("07 51 01 07 01 CB D1")
-            self.protocol.send_raw(fac_cmd, monitor_signal=self.monitor_signal)
-            time.sleep(1.0)
+            # 进入工厂模式 (与 MFC 一致: "07 51 01 07 01 CB D1")
+            fac_cmd = self.protocol.pack_factory_mode()
+            self.protocol.send_and_wait_ack(fac_cmd, monitor_signal=self.monitor_signal,
+                                            max_retries=5, ack_delay=0.3)
+            time.sleep(0.5)
             
             burn_history = {}
+            success = False
 
             for task_path in self.task_list:
                 cmd_type = task_path.split('/')[-1]
-                res_id = self.db.fetch_and_lock(task_path)
-                if not res_id:
-                    self.result_signal.emit(False, f"库存空: {task_path}")
-                    return
 
-                # 读取原始二进制
-                response = self.db.client.get_object(self.db.bucket, f"{task_path}/used/{res_id}")
-                raw_data = response.read()
-                response.close()
+                # MAC 任务不需要从 MinIO 读二进制文件
+                if cmd_type.upper() == "MAC":
+                    res_id = self.db.fetch_and_lock(task_path)
+                    if not res_id:
+                        self.result_signal.emit(False, f"库存空: {task_path}")
+                        return
+                    self.log_signal.emit(f"[MAC] 资源: {res_id}", "#3498db")
+                    cmd = self.protocol.pack_mac_command(res_id)
+                    self.log_signal.emit(f"[MAC] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
+                    success, msg = self.protocol.send_raw(cmd, monitor_signal=self.monitor_signal)
 
-                # 打印从 MinIO 获取的文件内容
-                self.log_signal.emit(f"[MinIO] 资源: {res_id}, 大小: {len(raw_data)} 字节", "#3498db")
-                self.log_signal.emit(f"[MinIO] HEX: {raw_data.hex(' ').upper()}", "#9b59b6")
-
-                if "HDCP" in cmd_type.upper():
-                    hdcp_ver_code = 0xE3 if "1.4" in cmd_type else 0xE4
-                    success = self.process_hdcp_burn(cmd_type, hdcp_ver_code, raw_data)
-                    if not success: return
+                elif "HDCP" in cmd_type.upper():
+                    res_id = self.db.fetch_and_lock(task_path)
+                    if not res_id:
+                        self.result_signal.emit(False, f"库存空: {task_path}")
+                        return
+                    # 读取原始二进制 Key 文件
+                    raw_data = self._read_minio_binary(task_path, res_id)
+                    hdcp_type = 0xE3 if "1.4" in cmd_type else 0xE4
+                    success = self.process_hdcp_burn(cmd_type, hdcp_type, raw_data)
+                    if not success:
+                        return
 
                 elif "ULPK" in cmd_type.upper():
+                    res_id = self.db.fetch_and_lock(task_path)
+                    if not res_id:
+                        self.result_signal.emit(False, f"库存空: {task_path}")
+                        return
+                    raw_data = self._read_minio_binary(task_path, res_id)
                     uid = self.extract_uid(res_id)
-                    # 组合 D1 + UID + 原始数据 (不作任何修改)
-                    payload = b"\xD1" + struct.pack(">I", int(uid)) + raw_data
-                    cmd = self.protocol.pack_5586_command(0xAB, payload)
-                    success, msg = self.protocol.send_raw(cmd, monitor_signal=self.monitor_signal)
+                    # 5586 ULPK: cmd_id=0xD1, payload=[UID 4字节]+[160字节数据]
+                    cmd = self.protocol.pack_ulpk_command(uid, raw_data)
+                    self.log_signal.emit(f"[ULPK] UID={uid}, 发送 {len(raw_data)} 字节", "#3498db")
+                    ok, ack, msg = self.protocol.send_and_wait_ack(
+                        cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=1.0)
+                    if not ok:
+                        self.result_signal.emit(False, f"{cmd_type} ULPK 烧录失败: {msg}")
+                        return
+                    success = True
 
-                elif "MAC" in cmd_type.upper():
-                    # 转换 MAC 地址为 6 字节二进制
-                    clean_mac = res_id.replace("-", "").replace(":", "").replace(".json", "").strip()
-                    mac_bytes = bytes.fromhex(clean_mac)
-                    # 5586 专用 MAC 指令头为 B3
-                    cmd = self.protocol.pack_5586_command(0xB3, mac_bytes)
-                    self.log_signal.emit(f"正在发送 MAC 烧录包: {res_id}", "#3498db")
-                    success, msg = self.protocol.send_raw(cmd, monitor_signal=self.monitor_signal)
+                else:
+                    self.log_signal.emit(f"未知任务类型: {cmd_type}", "#e74c3c")
+                    continue
 
                 if not success:
-                    self.result_signal.emit(False, f"{cmd_type} 烧录物理失败"); return
+                    self.result_signal.emit(False, f"{cmd_type} 烧录失败")
+                    return
                 
                 burn_history[cmd_type] = res_id
                 self.log_signal.emit(f"{cmd_type} 烧录成功 ✅", "#2ecc71")
 
-            self.db.upload_new_resource("sn_record", self.sn, {"sn": self.sn, "results": burn_history})
+            # 烧录 SN (MFC: cmd_id=0x88, SN 按 ASCII 编码)
+            self.log_signal.emit(f"[SN] 正在写入 SN: {self.sn}", "#3498db")
+            sn_cmd = self.protocol.pack_sn_command(self.sn)
+            self.log_signal.emit(f"[SN] 发送: {sn_cmd.hex(' ').upper()}", "#9b59b6")
+            sn_ok, sn_msg = self.protocol.send_raw(sn_cmd, monitor_signal=self.monitor_signal)
+            if not sn_ok:
+                self.result_signal.emit(False, f"SN 写入失败: {sn_msg}")
+                return
+            burn_history["SN"] = self.sn
+            self.log_signal.emit("SN 写入成功 ✅", "#2ecc71")
+
+            # 归档烧录记录
+            self.db.upload_new_resource("sn_record", self.sn,
+                                        {"sn": self.sn, "burn_results": burn_history})
             self.result_signal.emit(True, "所有任务已完成")
         except Exception as e:
             self.result_signal.emit(False, f"致命错误: {str(e)}")
 
-    def process_hdcp_burn(self, name, type_code, data):
-        """完全基于输入 data 长度的分包逻辑，不进行任何截取"""
-        if type_code == 0xE3:
-            block_size = 120 # 对应 MFC HDCP14_SIZE
-            # 根据原始数据长度计算总包数
-            total_blocks = (len(data) + block_size - 1) // block_size
-            # 5586 Header: 维持 MFC 0xE3 00 03 01 30 结构，但包数跟随实际数据
-            header_payload = bytes([0xE3, 0x00, total_blocks, 0x01, 0x30]) 
-        else:
-            block_size = 128
-            total_blocks = (len(data) + block_size - 1) // block_size
-            header_payload = bytes([0xE4, 0x00, total_blocks, 0x00, 0x80])
+    def _read_minio_binary(self, task_path, res_id):
+        """从 MinIO 读取二进制资源并打印内容"""
+        response = self.db.client.get_object(self.db.bucket, f"{task_path}/used/{res_id}")
+        raw_data = response.read()
+        response.close()
+        response.release_conn()
+        self.log_signal.emit(f"[MinIO] 资源: {res_id}, 大小: {len(raw_data)} 字节", "#3498db")
+        self.log_signal.emit(f"[MinIO] HEX: {raw_data.hex(' ').upper()}", "#9b59b6")
+        return raw_data
 
+    def process_hdcp_burn(self, name, type_code, data):
+        """
+        HDCP 分包烧录，逐包等待 ACK，与 MFC Timer 状态机逻辑一致。
+        HDCP1.4: block_size=120, type_code=0xE3
+        HDCP2.2: block_size=128, type_code=0xE4
+        """
+        if type_code == 0xE3:
+            block_size = self.protocol.HDCP14_BLOCK_SIZE  # 120
+        else:
+            block_size = self.protocol.HDCP22_BLOCK_SIZE  # 128
+
+        total_blocks = (len(data) + block_size - 1) // block_size
         full_crc = self.protocol.calculate_crc(data)
-        header_payload += struct.pack(">H", full_crc) + b"\x00\x00"
-        
-        header_cmd = self.protocol.pack_5586_command(0xFE, header_payload)
-        ok, msg = self.protocol.send_raw(header_cmd, monitor_signal=self.monitor_signal)
-        
+
+        # 1. 发送 Header 包并等待 ACK
+        header_cmd = self.protocol.pack_hdcp_header(type_code, total_blocks, block_size, full_crc)
+        self.log_signal.emit(f"[{name}] Header: blocks={total_blocks}, size={block_size}, crc=0x{full_crc:04X}", "#3498db")
+        self.log_signal.emit(f"[{name}] Header HEX: {header_cmd.hex(' ').upper()}", "#9b59b6")
+
+        ok, ack, msg = self.protocol.send_and_wait_ack(
+            header_cmd, monitor_signal=self.monitor_signal, max_retries=10, ack_delay=0.3)
         if not ok:
-            self.result_signal.emit(False, f"{name} Header 校验失败: {msg}")
+            self.result_signal.emit(False, f"{name} Header 失败: {msg}")
             return False
 
+        # 2. 逐包发送数据，每包等待 ACK (与 MFC 的 m_step 状态机一致)
         for b_id in range(1, total_blocks + 1):
             start = (b_id - 1) * block_size
             end = min(start + block_size, len(data))
             chunk = data[start:end]
-            
+
             chunk_cmd = self.protocol.pack_hdcp_chunk(type_code, b_id, chunk)
-            ok, msg = self.protocol.send_raw(chunk_cmd, monitor_signal=self.monitor_signal)
-            if not ok: return False
-            time.sleep(0.05)
+            self.log_signal.emit(f"[{name}] 分包 {b_id}/{total_blocks}, {len(chunk)} 字节", "#3498db")
+
+            ok, ack, msg = self.protocol.send_and_wait_ack(
+                chunk_cmd, monitor_signal=self.monitor_signal, max_retries=10, ack_delay=0.3)
+            if not ok:
+                self.result_signal.emit(False, f"{name} 分包 {b_id} 失败: {msg}")
+                return False
+
+        # 最后一包的 ACK 应为 F2 表示整体完成
+        self.log_signal.emit(f"[{name}] 烧录完成, 最终 ACK: {ack}", "#2ecc71")
         return True
     
     def extract_uid(self, filename):
-        """从文件名提取 UID (例如: ...-12345678.dat -> 12345678)"""
+        """
+        从文件名提取 UID，与 MFC 逻辑一致:
+        找到 .dat 前最后一个 '-' 后面的数字部分。
+        例如: ulpk-potk-00199D-0359-12345678.dat -> 12345678
+        """
         try:
-            # 兼容多种扩展名
             name_part = filename.replace(".json", "").replace(".dat", "").replace(".bin", "")
             if "-" in name_part:
                 return name_part.split("-")[-1]
