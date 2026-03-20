@@ -273,10 +273,10 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(central)
 
         self.tabs = QTabWidget()
+        self.tabs.addTab(self._create_burn_tab(), "烧录工具")
         self.tabs.addTab(self._create_import_tab(), "资源导入")
         self.tabs.addTab(self._create_view_tab(), "库存查询")
         self.tabs.addTab(self._create_trace_tab(), "SN 追溯")
-        self.tabs.addTab(self._create_burn_tab(), "烧录工具")
         layout.addWidget(self.tabs)
 
     # ==================== Tab 1: 资源导入 ====================
