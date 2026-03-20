@@ -252,7 +252,7 @@ class AdminWindow(QMainWindow):
                 # ... 提示信息 ...
                 if success: 
                     success_count = 1
-                    QMessageBox.information(self, "成功", f"Key {res_id} 已上传")
+                    QMessageBox.information(self, "成功", f"Key {fname} 已上传")
                 else: QMessageBox.warning(self, "失败", msg)
             except Exception as e: QMessageBox.critical(self, "错误", str(e))
 
