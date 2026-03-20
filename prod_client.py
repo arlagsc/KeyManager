@@ -292,17 +292,18 @@ class OfflineProdWindow(QMainWindow):
         task_group = QGroupBox("2. 烧录任务")
         task_layout = QVBoxLayout()
         
-        # MAC 行：勾选 + 客户选择
-        mac_row = QHBoxLayout()
+        # 客户选择（MAC 和 ULPK 共用）
+        client_row = QHBoxLayout()
+        client_row.addWidget(QLabel("客户:"))
+        self.client_combo = QComboBox()
+        self.client_combo.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        client_row.addWidget(self.client_combo, 1)
+        client_row.addStretch()
+        task_layout.addLayout(client_row)
+        
         self.check_mac = QCheckBox("烧录 MAC")
         self.check_mac.setChecked(True)
-        self.mac_client_combo = QComboBox()
-        self.mac_client_combo.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
-        mac_row.addWidget(self.check_mac)
-        mac_row.addWidget(QLabel("客户:"))
-        mac_row.addWidget(self.mac_client_combo)
-        mac_row.addStretch()
-        task_layout.addLayout(mac_row)
+        task_layout.addWidget(self.check_mac)
         
         self.key_checks = {}
         for kt in self.config.get("key_types", []):
@@ -470,13 +471,17 @@ class OfflineProdWindow(QMainWindow):
             return
 
         # 3. 任务列表构建
+        client_name = self.client_combo.currentText().strip().lower()
         tasks = []
         if self.check_mac.isChecked():
-            client_name = self.mac_client_combo.currentText().strip().lower()
             tasks.append(f"mac/{client_name}")
         for kt, cb in self.key_checks.items():
-            if cb.isChecked(): 
-                tasks.append(f"key/{kt}")
+            if cb.isChecked():
+                # ULPK 按客户区分路径
+                if "ULPK" in kt.upper():
+                    tasks.append(f"key/{kt}/{client_name}")
+                else:
+                    tasks.append(f"key/{kt}")
 
         if not tasks:
             QMessageBox.warning(self, "任务错误", "请至少勾选一项要烧录的内容！")

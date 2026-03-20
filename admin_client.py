@@ -102,6 +102,14 @@ class AdminWindow(QMainWindow):
         type_select_layout.addWidget(self.key_type_select, 1)
         layout.addLayout(type_select_layout)
 
+        # ULPK 客户选择（ULPK 按客户分目录存储）
+        key_client_layout = QHBoxLayout()
+        key_client_layout.addWidget(QLabel("客户 (ULPK):"))
+        self.key_client_select = QComboBox()
+        self.key_client_select.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        key_client_layout.addWidget(self.key_client_select, 1)
+        layout.addLayout(key_client_layout)
+
         key_btn_layout = QHBoxLayout()
         btn_single = QPushButton("选择单个文件上传")
         btn_single.clicked.connect(lambda: self.handle_key_upload(is_batch=False))
@@ -209,6 +217,13 @@ class AdminWindow(QMainWindow):
         key_type = self.key_type_select.currentText().strip()
         if not key_type: return
         
+        # ULPK 按客户分目录
+        if "ULPK" in key_type.upper():
+            client_name = self.key_client_select.currentText().strip().lower()
+            upload_path = f"key/{key_type}/{client_name}"
+        else:
+            upload_path = f"key/{key_type}"
+        
         success_count = 0
         if is_batch:
             dir_path = QFileDialog.getExistingDirectory(self, "选择 Key 文件夹")
@@ -218,26 +233,22 @@ class AdminWindow(QMainWindow):
             for fname in files:
                 fpath = os.path.join(dir_path, fname)
                 try:
-                    # 以二进制只读模式打开
                     with open(fpath, 'rb') as f:
                         content = f.read() 
                     
-                    # 保持原文件名作为 ID
-                    success, _ = self.db.upload_binary_resource(f"key/{key_type}", fname, content)
+                    success, _ = self.db.upload_binary_resource(upload_path, fname, content)
                     if success: success_count += 1
                 except Exception as e:
                     print(f"文件 {fname} 上传失败: {e}")
-            # ... 提示信息 ...
             QMessageBox.information(self, "结果", f"批量导入：{success_count}/{len(files)}")
         else:
-            # 单个文件同理
             fpath, _ = QFileDialog.getOpenFileName(self, "选择 Key 文件")
             if not fpath: return
             try:
                 with open(fpath, 'rb') as f:
                     content = f.read()
                 fname = os.path.basename(fpath)
-                success, msg = self.db.upload_binary_resource(f"key/{key_type}", fname, content)
+                success, msg = self.db.upload_binary_resource(upload_path, fname, content)
                 # ... 提示信息 ...
                 if success: 
                     success_count = 1
