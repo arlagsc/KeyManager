@@ -4,7 +4,10 @@
 a = Analysis(
     ['admin_client.py'],
     pathex=[],
-    binaries=[],
+    binaries=[
+        ('C:\\Users\\arlag\\AppData\\Local\\Programs\\Python\\Python313\\vcruntime140.dll', '.'),
+        ('C:\\Users\\arlag\\AppData\\Local\\Programs\\Python\\Python313\\vcruntime140_1.dll', '.'),
+    ],
     datas=[('config.json', '.')],
     hiddenimports=['minio', 'minio.api', 'minio.helpers', 'urllib3', 'certifi'],
     hookspath=[],
