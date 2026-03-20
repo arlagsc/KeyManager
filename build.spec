@@ -1,5 +1,5 @@
 # -*- mode: python ; coding: utf-8 -*-
-# 合并后的单一客户端打包配置
+# 单文件打包配置
 
 a = Analysis(
     ['admin_client.py'],
@@ -24,22 +24,16 @@ pyz = PYZ(a.pure)
 exe = EXE(
     pyz,
     a.scripts,
+    a.binaries,
+    a.datas,
     [],
-    exclude_binaries=True,
     name='KeyManager',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
     console=False,
     icon=None,
-)
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='KeyManager',
 )
