@@ -33,6 +33,7 @@ class BurnWorker(QThread):
             # 进入工厂模式 (与 MFC 一致: "07 51 01 07 01 CB D1")
             fac_cmd = self.protocol.pack_factory_mode()
             self.protocol.send_and_wait_ack(fac_cmd, monitor_signal=self.monitor_signal,
+                                            log_signal=self.log_signal,
                                             max_retries=5, ack_delay=0.3)
             time.sleep(0.5)
             
@@ -52,7 +53,8 @@ class BurnWorker(QThread):
                     cmd = self.protocol.pack_mac_command(res_id)
                     self.log_signal.emit(f"[MAC] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
-                        cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=0.5)
+                        cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+                        max_retries=5, ack_delay=0.5)
                     success = ok
 
                 elif "HDCP" in cmd_type.upper():
@@ -78,7 +80,8 @@ class BurnWorker(QThread):
                     cmd = self.protocol.pack_ulpk_command(uid, raw_data)
                     self.log_signal.emit(f"[ULPK] UID={uid}, 发送 {len(raw_data)} 字节", "#3498db")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
-                        cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=1.0)
+                        cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+                        max_retries=5, ack_delay=1.0)
                     if not ok:
                         self.result_signal.emit(False, f"{cmd_type} ULPK 烧录失败: {msg}")
                         return
@@ -100,7 +103,8 @@ class BurnWorker(QThread):
             sn_cmd = self.protocol.pack_sn_command(self.sn)
             self.log_signal.emit(f"[SN] 发送: {sn_cmd.hex(' ').upper()}", "#9b59b6")
             sn_ok, sn_ack, sn_msg = self.protocol.send_and_wait_ack(
-                sn_cmd, monitor_signal=self.monitor_signal, max_retries=5, ack_delay=0.5)
+                sn_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+                max_retries=5, ack_delay=0.5)
             if not sn_ok:
                 self.result_signal.emit(False, f"SN 写入失败: {sn_msg}")
                 return
@@ -155,7 +159,8 @@ class BurnWorker(QThread):
         self.log_signal.emit(f"[{name}] Header HEX: {header_cmd.hex(' ').upper()}", "#9b59b6")
 
         ok, ack, msg = self.protocol.send_and_wait_ack(
-            header_cmd, monitor_signal=self.monitor_signal, max_retries=10, ack_delay=0.3)
+            header_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+            max_retries=10, ack_delay=0.3)
         if not ok:
             self.result_signal.emit(False, f"{name} Header 失败: {msg}")
             return False
@@ -174,7 +179,8 @@ class BurnWorker(QThread):
             self.log_signal.emit(f"[{name}] 分包 {b_id}/{total_blocks}, {len(chunk)} 字节", "#3498db")
 
             ok, ack, msg = self.protocol.send_and_wait_ack(
-                chunk_cmd, monitor_signal=self.monitor_signal, max_retries=10, ack_delay=0.3)
+                chunk_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+                max_retries=10, ack_delay=0.3)
             if not ok:
                 self.result_signal.emit(False, f"{name} 分包 {b_id} 失败: {msg}")
                 return False

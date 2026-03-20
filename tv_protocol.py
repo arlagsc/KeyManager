@@ -45,7 +45,7 @@ class TVSerialProtocol:
         except Exception as e:
             return False, str(e)
 
-    def send_and_wait_ack(self, data, monitor_signal=None, max_retries=10, ack_delay=0.3):
+    def send_and_wait_ack(self, data, monitor_signal=None, log_signal=None, max_retries=10, ack_delay=0.3):
         """
         发送并等待 ACK，与 MFC Timer 逐包确认逻辑一致。
         返回 (success, ack_type, raw_hex)
@@ -56,11 +56,18 @@ class TVSerialProtocol:
                 self.ser = serial.Serial(self.port, self.baud, timeout=2)
             self.ser.reset_input_buffer()
             self.ser.write(data)
-            for _ in range(max_retries):
+            if log_signal:
+                log_signal.emit(f"[ACK] 已发送 {len(data)} 字节, 等待响应...", "#888888")
+            for attempt in range(max_retries):
                 time.sleep(ack_delay)
                 res = self.ser.read_all()
                 if monitor_signal and len(res) > 0:
                     monitor_signal.emit(res)
+                if log_signal:
+                    if len(res) > 0:
+                        log_signal.emit(f"[ACK] 第{attempt+1}次轮询: 收到 {len(res)} 字节 = {res.hex(' ').upper()}", "#888888")
+                    else:
+                        log_signal.emit(f"[ACK] 第{attempt+1}次轮询: 无数据", "#888888")
                 if b"\x03\x0C\xE0" in res or b"\x03\x0C\xE1" in res or b"\x03\x0C\xE2" in res:
                     return False, "ERROR", res.hex().upper()
                 if b"\x03\x0C\xF1" in res:
