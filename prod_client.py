@@ -375,17 +375,25 @@ class OfflineProdWindow(QMainWindow):
     def load_local_config(self):
         """从本地 config.json 加载配置"""
         try:
-            if not os.path.exists("config.json"):
+            # 兼容 pyinstaller 打包后的路径
+            if getattr(sys, 'frozen', False):
+                app_dir = os.path.dirname(sys.executable)
+            else:
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+            
+            config_path = os.path.join(app_dir, "config.json")
+            
+            if not os.path.exists(config_path):
                 # 提供默认模板
                 default_cfg = {
                     "minio": {"endpoint": "127.0.0.1:9000", "access_key": "minioadmin", "secret_key": "minioadmin", "bucket": "warehouse"},
                     "key_types": ["HDCP1.4", "HDCP2.2", "ULPK"]
                 }
-                with open("config.json", "w") as f:
+                with open(config_path, "w") as f:
                     json.dump(default_cfg, f, indent=4)
                 return default_cfg
             
-            with open("config.json", "r") as f:
+            with open(config_path, "r") as f:
                 return json.load(f)
         except Exception as e:
             QMessageBox.critical(self, "配置错误", f"解析 config.json 失败: {e}")

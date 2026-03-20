@@ -16,15 +16,22 @@ except ImportError:
     # 如果还没创建 minio_db.py，请参考之前的 Task 1 代码
     class MinioWarehouse: pass 
 
+def get_app_dir():
+    """获取应用所在目录（兼容 pyinstaller 打包后的路径）"""
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
 def load_config():
     """加载本地配置文件"""
     default_config = {
         "key_types": ["HDCP", "Widevine"],
         "minio": {"endpoint": "127.0.0.1:9000", "access_key": "minioadmin", "secret_key": "minioadmin", "bucket": "warehouse"}
     }
-    if os.path.exists("config.json"):
+    config_path = os.path.join(get_app_dir(), "config.json")
+    if os.path.exists(config_path):
         try:
-            with open("config.json", "r", encoding="utf-8") as f:
+            with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except:
             return default_config
