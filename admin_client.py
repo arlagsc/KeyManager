@@ -146,8 +146,8 @@ class AdminWindow(QMainWindow):
         filter_bar.addWidget(btn_refresh)
         layout.addLayout(filter_bar)
         
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["分类", "子类型", "唯一标识 (ID)", "状态"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["分类", "子类型", "客户", "唯一标识 (ID)", "状态"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
         return widget
@@ -285,50 +285,44 @@ class AdminWindow(QMainWindow):
                 except: continue
 
     def _add_row(self, path):
-        # 路径通常为: key/HDCP/available/file.bin 或 mac/used/00-11...json
+        # 路径格式:
+        #   mac/vizio/available/xx.json
+        #   key/ULPK 5586F prod/vizio/available/xx.dat
+        #   key/HDCP1.4 5586 prod/available/xx.bin
         parts = path.split('/')
         if len(parts) < 3: return
         
         row = self.table.rowCount()
         self.table.insertRow(row)
         
-        main_type = parts[0].upper() # MAC 或 KEY
+        main_type = parts[0].upper()
         status = "已使用" if "used" in path else "待使用"
-        
-        # 提取 ID（去掉扩展名）
         res_id = os.path.basename(path).split('.')[0]
         
-        # 子类型处理
-        sub_type = "网络地址" if parts[0] == "mac" else parts[1]
+        # 提取子类型和客户
+        mac_clients = [c.lower() for c in self.config.get("mac_clients", ["Vizio", "Onn"])]
+        client = ""
+        if parts[0] == "mac":
+            sub_type = "网络地址"
+            if len(parts) >= 4 and parts[1].lower() in mac_clients:
+                client = parts[1].capitalize()
+        else:
+            sub_type = parts[1]
+            # 检查路径中是否有客户名（ULPK 等）
+            for p in parts[2:]:
+                if p.lower() in mac_clients:
+                    client = p.capitalize()
+                    break
 
         self.table.setItem(row, 0, QTableWidgetItem(main_type))
         self.table.setItem(row, 1, QTableWidgetItem(sub_type))
-        self.table.setItem(row, 2, QTableWidgetItem(res_id))
-        # ... 设置状态颜色 ...
+        self.table.setItem(row, 2, QTableWidgetItem(client))
+        self.table.setItem(row, 3, QTableWidgetItem(res_id))
         stat_item = QTableWidgetItem(status)
         if status == "待使用": stat_item.setForeground(Qt.GlobalColor.darkGreen)
-        self.table.setItem(row, 3, stat_item)
+        self.table.setItem(row, 4, stat_item)
 
-    '''
-    def _add_row(self, path):
-        parts = path.split('/')
-        if len(parts) < 3: return
-        row = self.table.rowCount()
-        self.table.insertRow(row)
-        
-        main_type = "MAC" if parts[0] == "mac" else "KEY"
-        sub_type = "网络地址" if parts[0] == "mac" else parts[1]
-        res_id = parts[-1].replace(".json", "")
-        status = "已使用" if "used" in path else "待使用"
-        
-        self.table.setItem(row, 0, QTableWidgetItem(main_type))
-        self.table.setItem(row, 1, QTableWidgetItem(sub_type))
-        self.table.setItem(row, 2, QTableWidgetItem(res_id))
-        
-        stat_item = QTableWidgetItem(status)
-        if status == "待使用": stat_item.setForeground(Qt.GlobalColor.darkGreen)
-        self.table.setItem(row, 3, stat_item)
-    '''
+
     
     def query_sn_history(self):
         sn = self.trace_sn_input.text().strip()
