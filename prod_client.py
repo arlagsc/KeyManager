@@ -1,6 +1,7 @@
 import sys
 import json
 import os
+import io
 import struct
 import time
 import serial.tools.list_ports
@@ -113,9 +114,14 @@ class BurnWorker(QThread):
             burn_history["SN"] = self.sn
             self.log_signal.emit("SN 写入成功 ✅", "#2ecc71")
 
-            # 归档烧录记录
-            self.db.upload_new_resource("sn_record", self.sn,
-                                        {"sn": self.sn, "burn_results": burn_history})
+            # 归档烧录记录（直接写入 sn_record/{sn}.json，不走 available/used 流程）
+            record_data = json.dumps({"sn": self.sn, "burn_results": burn_history}).encode('utf-8')
+            record_path = f"sn_record/{self.sn}.json"
+            self.db.client.put_object(
+                self.db.bucket, record_path,
+                io.BytesIO(record_data), len(record_data),
+                content_type="application/json"
+            )
             self.result_signal.emit(True, "所有任务已完成")
         except Exception as e:
             self.result_signal.emit(False, f"致命错误: {str(e)}")
