@@ -274,8 +274,8 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._create_burn_tab(), "烧录工具")
-        self.tabs.addTab(self._create_import_tab(), "资源导入")
         self.tabs.addTab(self._create_manual_record_tab(), "手动录入")
+        self.tabs.addTab(self._create_import_tab(), "资源导入")
         self.tabs.addTab(self._create_view_tab(), "库存查询")
         self.tabs.addTab(self._create_trace_tab(), "SN 追溯")
         layout.addWidget(self.tabs)
@@ -481,8 +481,8 @@ class MainWindow(QMainWindow):
             burn_results[key_type] = res_id
 
         if not burn_results:
-            QMessageBox.warning(self, "提示", "请至少填写一项 MAC 或 Key 记录！")
-            return
+            # SN 是唯一必填项，MAC/Key 都是选填
+            pass
 
         # 写入 sn_record
         burn_results["SN"] = sn
