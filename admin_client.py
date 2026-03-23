@@ -441,6 +441,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入 SN 序列号！")
             return
 
+        # 检查 SN 是否已使用
+        if self._check_sn_exists(sn):
+            ret = QMessageBox.warning(self, "SN 重复",
+                f"SN [{sn}] 已存在烧录记录！\n继续将覆盖原有记录，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ret != QMessageBox.StandardButton.Yes:
+                return
+
         client_name = self.manual_client.currentText().strip().lower()
         mac_str = self.manual_mac.text().strip()
         burn_results = {}
@@ -880,6 +889,16 @@ class MainWindow(QMainWindow):
         self.burn_log.verticalScrollBar().setValue(
             self.burn_log.verticalScrollBar().maximum())
 
+    def _check_sn_exists(self, sn):
+        """检查 SN 是否已有烧录记录"""
+        for path in [f"sn_record/{sn}.json", f"sn_record/available/{sn}.json", f"sn_record/used/{sn}.json"]:
+            try:
+                self.db.client.stat_object(self.db.bucket, path)
+                return True
+            except:
+                continue
+        return False
+
     def _run_burn(self):
         current_port = self.port_combo.itemData(self.port_combo.currentIndex())
         if not current_port:
@@ -890,6 +909,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "提醒", "请输入或扫描机器 SN 序列号！")
             self.sn_input.setFocus()
             return
+
+        # 检查 SN 是否已使用
+        if self._check_sn_exists(sn):
+            ret = QMessageBox.warning(self, "SN 重复",
+                f"SN [{sn}] 已存在烧录记录！\n继续将覆盖原有记录，是否继续？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ret != QMessageBox.StandardButton.Yes:
+                return
 
         client_name = self.client_combo.currentText().strip().lower()
         tasks = []
