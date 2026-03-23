@@ -70,13 +70,15 @@ class BurnWorker(QThread):
                                             max_retries=5, ack_delay=0.3)
             time.sleep(0.5)
             burn_history = {}
+            # 记录待移动的资源: [(task_path, res_id), ...]
+            pending_moves = []
             success = False
 
             for task_path in self.task_list:
                 cmd_type = task_path.split('/')[-1]
 
                 if task_path.startswith("mac/"):
-                    res_id = self.db.fetch_and_lock(task_path)
+                    res_id = self.db.peek_available(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
@@ -92,7 +94,7 @@ class BurnWorker(QThread):
                     success = ok
 
                 elif "HDCP" in cmd_type.upper():
-                    res_id = self.db.fetch_and_lock(task_path)
+                    res_id = self.db.peek_available(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
@@ -103,7 +105,7 @@ class BurnWorker(QThread):
                         return
 
                 elif "ULPK" in cmd_type.upper():
-                    res_id = self.db.fetch_and_lock(task_path)
+                    res_id = self.db.peek_available(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
@@ -127,6 +129,7 @@ class BurnWorker(QThread):
                     self.result_signal.emit(False, f"{cmd_type} 烧录失败")
                     return
                 burn_history[cmd_type] = res_id
+                pending_moves.append((task_path, res_id))
                 self.log_signal.emit(f"{cmd_type} 烧录成功 ✅", "#2ecc71")
 
             # 烧录 SN
@@ -142,6 +145,11 @@ class BurnWorker(QThread):
             burn_history["SN"] = self.sn
             self.log_signal.emit("SN 写入成功 ✅", "#2ecc71")
 
+            # 全部烧录成功，统一将资源从 available 移到 used
+            self.log_signal.emit("正在标记资源为已使用...", "#f39c12")
+            for task_path, res_id in pending_moves:
+                self.db.move_to_used(task_path, res_id)
+
             # 归档烧录记录
             record_data = json.dumps({"sn": self.sn, "burn_results": burn_history}).encode('utf-8')
             record_path = f"sn_record/{self.sn}.json"
@@ -155,7 +163,7 @@ class BurnWorker(QThread):
             self.result_signal.emit(False, f"致命错误: {str(e)}")
 
     def _read_minio_binary(self, task_path, res_id):
-        response = self.db.client.get_object(self.db.bucket, f"{task_path}/used/{res_id}")
+        response = self.db.client.get_object(self.db.bucket, f"{task_path}/available/{res_id}")
         raw_data = response.read()
         response.close()
         response.release_conn()
