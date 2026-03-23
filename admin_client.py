@@ -275,6 +275,7 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.addTab(self._create_burn_tab(), "烧录工具")
         self.tabs.addTab(self._create_import_tab(), "资源导入")
+        self.tabs.addTab(self._create_manual_record_tab(), "手动录入")
         self.tabs.addTab(self._create_view_tab(), "库存查询")
         self.tabs.addTab(self._create_trace_tab(), "SN 追溯")
         layout.addWidget(self.tabs)
@@ -336,6 +337,190 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
         return widget
+
+    # ==================== Tab: 手动录入 ====================
+    def _create_manual_record_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        layout.addWidget(QLabel("<b>手动录入已使用的 SN / MAC / Key 记录</b>"))
+        layout.addWidget(QLabel("适用于线下已烧录但系统中未记录的情况，提交后会将对应资源标记为已使用并生成归档记录。"))
+        layout.addSpacing(10)
+
+        # SN 输入
+        sn_row = QHBoxLayout()
+        sn_row.addWidget(QLabel("SN 序列号:"))
+        self.manual_sn = QLineEdit()
+        self.manual_sn.setPlaceholderText("必填，机器 SN")
+        sn_row.addWidget(self.manual_sn, 1)
+        layout.addLayout(sn_row)
+
+        # 客户选择
+        client_row = QHBoxLayout()
+        client_row.addWidget(QLabel("客户:"))
+        self.manual_client = QComboBox()
+        self.manual_client.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        client_row.addWidget(self.manual_client, 1)
+        client_row.addStretch(2)
+        layout.addLayout(client_row)
+
+        # MAC 输入
+        mac_row = QHBoxLayout()
+        mac_row.addWidget(QLabel("MAC 地址:"))
+        self.manual_mac = QLineEdit()
+        self.manual_mac.setPlaceholderText("选填，如 AA-BB-CC-DD-EE-FF")
+        mac_row.addWidget(self.manual_mac, 1)
+        layout.addLayout(mac_row)
+
+        # Key 条目列表
+        layout.addSpacing(10)
+        layout.addWidget(QLabel("<b>Key 资源 (选填，可添加多条):</b>"))
+
+        self.manual_key_rows = []
+        key_list_widget = QWidget()
+        self.manual_key_list_layout = QVBoxLayout(key_list_widget)
+        self.manual_key_list_layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(key_list_widget)
+
+        btn_add_key = QPushButton("+ 添加一条 Key 记录")
+        btn_add_key.clicked.connect(self._add_manual_key_row)
+        layout.addWidget(btn_add_key)
+
+        # 提交按钮
+        layout.addSpacing(20)
+        btn_submit = QPushButton("提交录入")
+        btn_submit.setFixedHeight(45)
+        btn_submit.setStyleSheet("background-color: #e67e22; color: white; font-weight: bold; font-size: 14px;")
+        btn_submit.clicked.connect(self._submit_manual_record)
+        layout.addWidget(btn_submit)
+
+        # 结果提示
+        self.manual_result_label = QLabel("")
+        layout.addWidget(self.manual_result_label)
+
+        layout.addStretch()
+        return widget
+
+    def _add_manual_key_row(self):
+        """添加一行 Key 录入"""
+        row_widget = QWidget()
+        row_layout = QHBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 2, 0, 2)
+
+        type_combo = QComboBox()
+        type_combo.addItems(self.config.get("key_types", []))
+        type_combo.setEditable(True)
+        res_id_input = QLineEdit()
+        res_id_input.setPlaceholderText("资源文件名 / ID")
+        btn_remove = QPushButton("删除")
+        btn_remove.setFixedWidth(60)
+
+        row_layout.addWidget(QLabel("类型:"))
+        row_layout.addWidget(type_combo, 1)
+        row_layout.addWidget(QLabel("资源ID:"))
+        row_layout.addWidget(res_id_input, 1)
+        row_layout.addWidget(btn_remove)
+
+        entry = {"widget": row_widget, "type": type_combo, "id": res_id_input}
+        self.manual_key_rows.append(entry)
+        self.manual_key_list_layout.addWidget(row_widget)
+
+        btn_remove.clicked.connect(lambda: self._remove_manual_key_row(entry))
+
+    def _remove_manual_key_row(self, entry):
+        if entry in self.manual_key_rows:
+            self.manual_key_rows.remove(entry)
+            entry["widget"].setParent(None)
+            entry["widget"].deleteLater()
+
+    def _submit_manual_record(self):
+        """提交手动录入记录"""
+        sn = self.manual_sn.text().strip()
+        if not sn:
+            QMessageBox.warning(self, "提示", "请输入 SN 序列号！")
+            return
+
+        client_name = self.manual_client.currentText().strip().lower()
+        mac_str = self.manual_mac.text().strip()
+        burn_results = {}
+        errors = []
+
+        # 处理 MAC
+        if mac_str:
+            try:
+                clean = mac_str.replace(":", "").replace("-", "").replace(" ", "").upper()
+                if len(clean) != 12:
+                    raise ValueError("MAC 必须为 12 位十六进制")
+                std_mac = "-".join(clean[i:i+2] for i in range(0, 12, 2))
+                mac_path = f"mac/{client_name}"
+                # 尝试从 available 移到 used
+                moved = self._try_move_to_used(mac_path, std_mac + ".json")
+                if moved:
+                    burn_results[client_name] = std_mac
+                else:
+                    # 资源不在 available 中，仍然记录但提示
+                    burn_results[client_name] = std_mac
+                    errors.append(f"MAC {std_mac} 未在库存 available 中找到，已直接记录")
+            except Exception as e:
+                errors.append(f"MAC 格式错误: {e}")
+
+        # 处理 Key 列表
+        for entry in self.manual_key_rows:
+            key_type = entry["type"].currentText().strip()
+            res_id = entry["id"].text().strip()
+            if not key_type or not res_id:
+                continue
+            if "ULPK" in key_type.upper():
+                key_path = f"key/{key_type}/{client_name}"
+            else:
+                key_path = f"key/{key_type}"
+            moved = self._try_move_to_used(key_path, res_id)
+            if not moved:
+                errors.append(f"Key [{key_type}] {res_id} 未在 available 中找到，已直接记录")
+            burn_results[key_type] = res_id
+
+        if not burn_results:
+            QMessageBox.warning(self, "提示", "请至少填写一项 MAC 或 Key 记录！")
+            return
+
+        # 写入 sn_record
+        burn_results["SN"] = sn
+        record_data = json.dumps({"sn": sn, "burn_results": burn_results}).encode('utf-8')
+        record_path = f"sn_record/{sn}.json"
+        try:
+            self.db.client.put_object(
+                self.db.bucket, record_path,
+                io.BytesIO(record_data), len(record_data),
+                content_type="application/json"
+            )
+            msg = f"SN {sn} 的记录已成功写入！"
+            if errors:
+                msg += "\n\n注意:\n" + "\n".join(errors)
+            QMessageBox.information(self, "录入成功", msg)
+            self.manual_result_label.setText(f"✅ 最近录入: SN={sn}, 共 {len(burn_results)-1} 项资源")
+            self.manual_result_label.setStyleSheet("color: green;")
+            # 清空输入
+            self.manual_sn.clear()
+            self.manual_mac.clear()
+            for e in list(self.manual_key_rows):
+                self._remove_manual_key_row(e)
+        except Exception as e:
+            QMessageBox.critical(self, "写入失败", f"无法写入 MinIO: {e}")
+
+    def _try_move_to_used(self, res_path, filename):
+        """尝试将资源从 available 移到 used，返回是否成功"""
+        from minio.commonconfig import CopySource
+        src = f"{res_path}/available/{filename}"
+        dst = f"{res_path}/used/{filename}"
+        try:
+            self.db.client.stat_object(self.db.bucket, src)
+            source = CopySource(self.db.bucket, src)
+            self.db.client.copy_object(self.db.bucket, dst, source)
+            self.db.client.remove_object(self.db.bucket, src)
+            return True
+        except:
+            return False
 
     # ==================== Tab 2: 库存查询 ====================
     def _create_view_tab(self):

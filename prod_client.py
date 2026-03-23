@@ -386,8 +386,14 @@ class OfflineProdWindow(QMainWindow):
             if not os.path.exists(config_path):
                 # 提供默认模板
                 default_cfg = {
-                    "minio": {"endpoint": "127.0.0.1:9000", "access_key": "minioadmin", "secret_key": "minioadmin", "bucket": "warehouse"},
-                    "key_types": ["HDCP1.4", "HDCP2.2", "ULPK"]
+                    "key_types": ["HDCP1.4 5586 dev", "HDCP2.2 5586 dev","HDCP1.4 5586 prod", "HDCP2.2 5586 prod", "ULPK 5586F dev", "ULPK 5586F prod", "ULPK 5586L dev", "ULPK 5586L prod"],
+                    "mac_clients": ["Vizio", "Onn"],
+                    "minio": {
+                        "endpoint": "172.16.9.28:9000",
+                        "access_key": "admin",
+                        "secret_key": "12345678",
+                        "bucket": "warehouse"
+                    }
                 }
                 with open(config_path, "w") as f:
                     json.dump(default_cfg, f, indent=4)
