@@ -75,7 +75,14 @@ class BurnWorker(QThread):
             success = False
 
             for task_path in self.task_list:
-                cmd_type = task_path.split('/')[-1]
+                # 对于 key/ULPK xxx/client 路径，类型名是中间部分而非最后一段
+                parts = task_path.split('/')
+                if parts[0] == "mac":
+                    cmd_type = parts[-1]  # 客户名，如 onn
+                elif len(parts) >= 3 and "ULPK" in parts[1].upper():
+                    cmd_type = parts[1]   # 如 "ULPK 5586L prod"
+                else:
+                    cmd_type = parts[1] if len(parts) >= 2 else parts[-1]
 
                 if task_path.startswith("mac/"):
                     res_id = self.db.peek_available(task_path)
