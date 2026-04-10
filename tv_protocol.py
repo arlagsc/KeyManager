@@ -56,6 +56,7 @@ class TVSerialProtocol:
                 self.ser = serial.Serial(self.port, self.baud, timeout=2)
             self.ser.reset_input_buffer()
             self.ser.write(data)
+            self.ser.flush()  # 确保数据完全发出
             if log_signal:
                 log_signal.emit(f"[ACK] 已发送 {len(data)} 字节, 等待响应...", "#888888")
             for attempt in range(max_retries):

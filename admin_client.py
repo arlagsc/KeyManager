@@ -211,6 +211,8 @@ class BurnWorker(QThread):
             chunk = data[start:end]
             chunk_cmd = self.protocol.pack_hdcp_chunk(type_code, b_id, chunk)
             self.log_signal.emit(f"[{name}] 分包 {b_id}/{total_blocks}, {len(chunk)} 字节", "#3498db")
+            # 包间延迟，与 MFC Timer 300ms 轮询节奏一致
+            time.sleep(0.1)
             ok, ack, msg = self.protocol.send_and_wait_ack(
                 chunk_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
                 max_retries=10, ack_delay=0.3)
