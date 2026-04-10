@@ -186,7 +186,11 @@ class BurnWorker(QThread):
             total_blocks = (len(data) + block_size - 1) // block_size
         else:
             block_size = self.protocol.HDCP22_BLOCK_SIZE
-            data = data[:self.protocol.HDCP22_TOTAL_SIZE]
+            # key 不足 1044 字节时补零，超过则截取
+            if len(data) < self.protocol.HDCP22_TOTAL_SIZE:
+                data = data + b'\x00' * (self.protocol.HDCP22_TOTAL_SIZE - len(data))
+            else:
+                data = data[:self.protocol.HDCP22_TOTAL_SIZE]
             total_blocks = self.protocol.HDCP22_BLOCK_NO
 
         full_crc = self.protocol.calculate_crc(data)
@@ -205,9 +209,6 @@ class BurnWorker(QThread):
             start = (b_id - 1) * block_size
             end = len(data) if b_id == total_blocks else start + block_size
             chunk = data[start:end]
-            # HDCP2.2 每包必须固定 block_size 字节，不足补零
-            if type_code == 0xE4 and len(chunk) < block_size:
-                chunk = chunk + b'\x00' * (block_size - len(chunk))
             chunk_cmd = self.protocol.pack_hdcp_chunk(type_code, b_id, chunk)
             self.log_signal.emit(f"[{name}] 分包 {b_id}/{total_blocks}, {len(chunk)} 字节", "#3498db")
             ok, ack, msg = self.protocol.send_and_wait_ack(
