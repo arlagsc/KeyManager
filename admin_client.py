@@ -209,9 +209,6 @@ class BurnWorker(QThread):
             start = (b_id - 1) * block_size
             end = len(data) if b_id == total_blocks else start + block_size
             chunk = data[start:end]
-            # HDCP2.2 每包固定 block_size 字节，不足补零（电视端按固定长度校验）
-            if type_code == 0xE4 and len(chunk) < block_size:
-                chunk = chunk + b'\x00' * (block_size - len(chunk))
             chunk_cmd = self.protocol.pack_hdcp_chunk(type_code, b_id, chunk)
             self.log_signal.emit(f"[{name}] 分包 {b_id}/{total_blocks}, {len(chunk)} 字节", "#3498db")
             ok, ack, msg = self.protocol.send_and_wait_ack(
