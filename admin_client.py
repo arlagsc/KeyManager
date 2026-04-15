@@ -540,12 +540,26 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "写入失败", f"无法写入 MinIO: {e}")
 
     def _try_move_to_used(self, res_path, filename):
-        """尝试将资源从 available 移到 used，返回是否成功"""
+        """尝试将资源从 available 移到 used，支持模糊匹配（不带后缀也能找到）"""
         from minio.commonconfig import CopySource
+        # 先精确匹配
         src = f"{res_path}/available/{filename}"
-        dst = f"{res_path}/used/{filename}"
         try:
             self.db.client.stat_object(self.db.bucket, src)
+        except:
+            # 精确匹配失败，按前缀模糊搜索
+            src = None
+            prefix = f"{res_path}/available/{filename}"
+            try:
+                for obj in self.db.client.list_objects(self.db.bucket, prefix=prefix, recursive=True):
+                    src = obj.object_name
+                    break
+            except:
+                pass
+            if not src:
+                return False
+        dst = src.replace("/available/", "/used/", 1)
+        try:
             source = CopySource(self.db.bucket, src)
             self.db.client.copy_object(self.db.bucket, dst, source)
             self.db.client.remove_object(self.db.bucket, src)
