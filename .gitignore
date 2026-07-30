@@ -1,2 +1,13 @@
 __pycache__/
 *.pyc
+build/
+dist/
+*.spec
+*.cpp
+*.zip
+*.bin
+dist/admin_client.exe
+build/admin_client/EXE-00.toc
+build/admin_client/PKG-00.toc
+build/admin_client/PYZ-00.pyz
+build/admin_client/PYZ-00.toc

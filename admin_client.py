@@ -62,6 +62,11 @@ class BurnWorker(QThread):
 
     def run(self):
         try:
+            # 检查网络连接
+            if not self.db.check_network_connection():
+                self.result_signal.emit(False, "网络连接失败：无法连接到MinIO服务器，请检查网络连接。")
+                return
+
             self.log_signal.emit(f"--- 5586 全功能烧录启动: SN {self.sn} ---", "#ffffff")
             # 进入工厂模式
             fac_cmd = self.protocol.pack_factory_mode()
@@ -270,7 +275,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.0")
+        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.4")
         self.resize(1100, 800)
 
         # 初始化 MinIO
@@ -281,6 +286,9 @@ class MainWindow(QMainWindow):
             secret_key=m_cfg.get("secret_key", "minioadmin"),
             bucket=m_cfg.get("bucket", "warehouse")
         )
+
+        # 初始化网络状态为未知，稍后异步检查
+        self.network_status = None
 
         # 初始化串口协议
         self.protocol = TVSerialProtocol()
@@ -301,6 +309,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._create_view_tab(), "库存查询")
         self.tabs.addTab(self._create_trace_tab(), "SN 追溯")
         layout.addWidget(self.tabs)
+
+        # 添加状态栏
+        self.status_bar = QLabel()
+        self._update_network_status()
+        layout.addWidget(self.status_bar)
 
     # ==================== Tab 1: 资源导入 ====================
     def _create_import_tab(self):
@@ -358,9 +371,17 @@ class MainWindow(QMainWindow):
         layout.addLayout(key_btn_layout)
 
         layout.addStretch()
-        return widget
 
-    # ==================== Tab: 手动录入 ====================
+        # 网络状态检查
+        network_layout = QHBoxLayout()
+        network_layout.addWidget(QLabel("网络状态:"))
+        self.network_check_btn = QPushButton("检查连接")
+        self.network_check_btn.clicked.connect(self._check_network_status)
+        network_layout.addWidget(self.network_check_btn)
+        network_layout.addStretch()
+        layout.addLayout(network_layout)
+
+        return widget
     def _create_manual_record_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -458,6 +479,11 @@ class MainWindow(QMainWindow):
 
     def _submit_manual_record(self):
         """提交手动录入记录"""
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         sn = self.manual_sn.text().strip()
         if not sn:
             QMessageBox.warning(self, "提示", "请输入 SN 序列号！")
@@ -722,6 +748,11 @@ class MainWindow(QMainWindow):
         return "-".join(clean[i:i+2] for i in range(0, 12, 2))
 
     def _handle_batch_mac_upload(self):
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         raw_mac = self.start_mac_input.text().strip()
         count = self.mac_count_input.value()
         client_name = self.mac_client_select.currentText().strip().lower()
@@ -739,6 +770,11 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "错误", f"MAC 处理失败: {str(e)}")
 
     def _handle_key_upload(self, is_batch=False):
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         key_type = self.key_type_select.currentText().strip()
         if not key_type: return
         if "ULPK" in key_type.upper():
@@ -748,12 +784,28 @@ class MainWindow(QMainWindow):
             upload_path = f"key/{key_type}"
 
         success_count = 0
+        skipped_count = 0
         if is_batch:
             dir_path = QFileDialog.getExistingDirectory(self, "选择 Key 文件夹")
             if not dir_path: return
             files = [f for f in os.listdir(dir_path) if os.path.isfile(os.path.join(dir_path, f))]
+
+            # 检查文件格式要求
+            expected_ext = None
+            if "ULPK" in key_type.upper():
+                expected_ext = ".dat"
+            elif "HDCP" in key_type.upper():
+                expected_ext = ".bin"
+
             for fname in files:
                 fpath = os.path.join(dir_path, fname)
+
+                # 检查文件扩展名
+                if expected_ext and not fname.lower().endswith(expected_ext):
+                    print(f"跳过文件 {fname}: 期望格式 {expected_ext}，实际格式 .{fname.split('.')[-1] if '.' in fname else '无扩展名'}")
+                    skipped_count += 1
+                    continue
+
                 try:
                     with open(fpath, 'rb') as f:
                         content = f.read()
@@ -761,14 +813,42 @@ class MainWindow(QMainWindow):
                     if success: success_count += 1
                 except Exception as e:
                     print(f"文件 {fname} 上传失败: {e}")
-            QMessageBox.information(self, "结果", f"批量导入：{success_count}/{len(files)}")
+
+            # 显示结果
+            total_files = len(files)
+            if skipped_count > 0:
+                QMessageBox.information(self, "结果",
+                    f"批量导入完成：\n"
+                    f"✅ 成功上传: {success_count} 个文件\n"
+                    f"⚠️  跳过格式不符: {skipped_count} 个文件\n"
+                    f"📁 总文件数: {total_files} 个")
+            else:
+                QMessageBox.information(self, "结果", f"批量导入：{success_count}/{total_files}")
         else:
             fpath, _ = QFileDialog.getOpenFileName(self, "选择 Key 文件")
             if not fpath: return
+
+            fname = os.path.basename(fpath)
+
+            # 检查文件格式要求
+            expected_ext = None
+            if "ULPK" in key_type.upper():
+                expected_ext = ".dat"
+            elif "HDCP" in key_type.upper():
+                expected_ext = ".bin"
+
+            if expected_ext and not fname.lower().endswith(expected_ext):
+                QMessageBox.warning(self, "文件格式错误",
+                    f"文件格式不正确！\n\n"
+                    f"Key 类型: {key_type}\n"
+                    f"期望格式: *{expected_ext}\n"
+                    f"选择文件: {fname}\n\n"
+                    f"请重新选择正确格式的文件。")
+                return
+
             try:
                 with open(fpath, 'rb') as f:
                     content = f.read()
-                fname = os.path.basename(fpath)
                 success, msg = self.db.upload_binary_resource(upload_path, fname, content)
                 if success:
                     QMessageBox.information(self, "成功", f"Key {fname} 已上传")
@@ -779,6 +859,11 @@ class MainWindow(QMainWindow):
 
     # ==================== 库存查询逻辑 ====================
     def _refresh_inventory(self):
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         self.table.setRowCount(0)
         sel_type = self.type_filter.currentText()
         sel_stat = self.status_filter.currentText()
@@ -834,6 +919,11 @@ class MainWindow(QMainWindow):
 
     # ==================== SN 追溯逻辑 ====================
     def _query_sn_history(self):
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         sn = self.trace_sn_input.text().strip()
         if not sn: return
         self.trace_result_table.setRowCount(0)
@@ -936,6 +1026,11 @@ class MainWindow(QMainWindow):
         return False
 
     def _run_burn(self):
+        # 检查网络连接
+        if not self.db.check_network_connection():
+            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return
+
         current_port = self.port_combo.itemData(self.port_combo.currentIndex())
         if not current_port:
             QMessageBox.warning(self, "硬件错误", "请先连接串口并点击刷新！")
@@ -1002,9 +1097,47 @@ class MainWindow(QMainWindow):
             self._burn_log(f"\n[FAIL] {msg}", "#e74c3c")
             QMessageBox.critical(self, "烧录失败", msg)
 
+    def _update_network_status(self):
+        """更新网络状态显示"""
+        if self.network_status is None:
+            self.status_bar.setText("网络状态: 🔄 正在检查连接...")
+            self.status_bar.setStyleSheet("color: blue; font-weight: bold;")
+        elif self.network_status:
+            self.status_bar.setText("网络状态: ✅ 已连接到MinIO服务器")
+            self.status_bar.setStyleSheet("color: green; font-weight: bold;")
+        else:
+            self.status_bar.setText("网络状态: ❌ 无法连接到MinIO服务器")
+            self.status_bar.setStyleSheet("color: red; font-weight: bold;")
+
+    def _async_check_network(self):
+        """异步检查网络连接"""
+        try:
+            self.network_status = self.db.check_network_connection()
+            self._update_network_status()
+
+            if not self.network_status:
+                QMessageBox.warning(self, "网络连接警告",
+                    "无法连接到MinIO服务器！\n\n请检查：\n1. 网络连接是否正常\n2. MinIO服务器是否运行\n3. 服务器地址和端口是否正确\n\n程序将继续运行，但网络相关功能将不可用。")
+        except Exception as e:
+            self.network_status = False
+            self._update_network_status()
+            QMessageBox.warning(self, "网络检查错误", f"网络检查过程中发生错误：{e}")
+
+    def _check_network_status(self):
+        """手动检查网络状态"""
+        self.network_status = self.db.check_network_connection()
+        self._update_network_status()
+        if self.network_status:
+            QMessageBox.information(self, "网络检查", "✅ 网络连接正常！")
+        else:
+            QMessageBox.warning(self, "网络检查", "❌ 无法连接到MinIO服务器！\n请检查网络连接。")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
+    # UI显示后异步检查网络连接
+    from PyQt6.QtCore import QTimer
+    QTimer.singleShot(100, window._async_check_network)
     sys.exit(app.exec())
