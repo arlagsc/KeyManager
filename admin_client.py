@@ -13,6 +13,211 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QFont
 
+# ============================================================
+# Frontend-Design 规范 - 现代工业深色控制台 UI 样式表 (QSS)
+# ============================================================
+MODERN_INDUSTRIAL_QSS = """
+/* 全局窗口基础设置 */
+QMainWindow, QDialog {
+    background-color: #0f172a;
+    color: #f8fafc;
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-size: 13px;
+}
+
+QWidget {
+    color: #cbd5e1;
+    font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+/* Tab 选项卡组 */
+QTabWidget::pane {
+    border: 1px solid #334155;
+    border-radius: 8px;
+    background-color: #1e293b;
+    top: -1px;
+}
+
+QTabBar::tab {
+    background-color: #0f172a;
+    color: #94a3b8;
+    border: 1px solid #334155;
+    border-bottom: none;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+    padding: 8px 18px;
+    margin-right: 4px;
+    font-weight: 600;
+}
+
+QTabBar::tab:hover {
+    background-color: #1e293b;
+    color: #38bdf8;
+}
+
+QTabBar::tab:selected {
+    background-color: #1e293b;
+    color: #f8fafc;
+    border-top: 3px solid #38bdf8;
+    border-left: 1px solid #334155;
+    border-right: 1px solid #334155;
+}
+
+/* 分组框 QGroupBox */
+QGroupBox {
+    background-color: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    margin-top: 1.2em;
+    padding-top: 14px;
+    font-weight: bold;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 12px;
+    padding: 2px 8px;
+    background-color: #0f172a;
+    color: #38bdf8;
+    border: 1px solid #334155;
+    border-radius: 4px;
+}
+
+/* 输入框 & 下拉菜单 */
+QLineEdit, QSpinBox, QComboBox {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    padding: 6px 12px;
+    color: #f8fafc;
+    selection-background-color: #0284c7;
+    selection-color: #ffffff;
+}
+
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+    border: 1px solid #38bdf8;
+    background-color: #111c33;
+}
+
+QComboBox::drop-down {
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 20px;
+    border-left-width: 0px;
+}
+
+QComboBox QAbstractItemView {
+    background-color: #1e293b;
+    border: 1px solid #38bdf8;
+    selection-background-color: #0284c7;
+    color: #f8fafc;
+    padding: 4px;
+}
+
+/* 按钮通用样式 */
+QPushButton {
+    background-color: #2563eb;
+    color: #ffffff;
+    border: none;
+    border-radius: 6px;
+    padding: 7px 16px;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background-color: #3b82f6;
+}
+
+QPushButton:pressed {
+    background-color: #1d4ed8;
+}
+
+QPushButton:disabled {
+    background-color: #334155;
+    color: #64748b;
+}
+
+/* 表格控件 QTableWidget */
+QTableWidget {
+    background-color: #0f172a;
+    border: 1px solid #334155;
+    gridline-color: #1e293b;
+    border-radius: 6px;
+    color: #f8fafc;
+}
+
+QTableWidget::item {
+    padding: 6px;
+}
+
+QTableWidget::item:alternate {
+    background-color: #162032;
+}
+
+QTableWidget::item:selected {
+    background-color: #1e3a8a;
+    color: #38bdf8;
+}
+
+QHeaderView::section {
+    background-color: #1e293b;
+    color: #38bdf8;
+    padding: 8px;
+    border: none;
+    border-right: 1px solid #334155;
+    border-bottom: 2px solid #0284c7;
+    font-weight: bold;
+}
+
+/* 文本编辑器 / 日志监控框 */
+QPlainTextEdit {
+    background-color: #090d16;
+    border: 1px solid #334155;
+    border-radius: 6px;
+    color: #f8fafc;
+    padding: 8px;
+    font-family: 'Consolas', 'Courier New', monospace;
+}
+
+/* 复选框 QCheckBox */
+QCheckBox {
+    spacing: 8px;
+    color: #f8fafc;
+}
+
+QCheckBox::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    border: 1px solid #475569;
+    background-color: #0f172a;
+}
+
+QCheckBox::indicator:checked {
+    background-color: #0284c7;
+    border: 1px solid #38bdf8;
+}
+
+/* 滚动条 */
+QScrollBar:vertical {
+    border: none;
+    background-color: #0f172a;
+    width: 10px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background-color: #334155;
+    border-radius: 5px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background-color: #475569;
+}
+"""
+
 from minio_db import MinioWarehouse
 from tv_protocol import TVSerialProtocol
 
@@ -700,13 +905,37 @@ class MainWindow(QMainWindow):
 
         # SN 录入
         self.sn_input = QLineEdit()
-        self.sn_input.setPlaceholderText("在此录入 SN...")
-        self.sn_input.setFont(QFont("Consolas", 14))
-        self.btn_start = QPushButton("开始烧录")
-        self.btn_start.setFixedHeight(50)
-        self.btn_start.setStyleSheet("background-color: #27ae60; color: white; font-weight: bold;")
+        self.sn_input.setPlaceholderText("在此输入或扫描 SN 序列号...")
+        self.sn_input.setFont(QFont("Consolas", 14, QFont.Weight.Bold))
+        self.sn_input.setStyleSheet("QLineEdit { font-size: 16px; padding: 8px 12px; background-color: #090d16; border: 1px solid #38bdf8; border-radius: 8px; color: #38bdf8; } QLineEdit:focus { border: 2px solid #00f0ff; background-color: #0e172a; }")
+
+        self.btn_start = QPushButton("🚀 开始全功能烧录")
+        self.btn_start.setFixedHeight(52)
+        self.btn_start.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_start.setStyleSheet("""
+            QPushButton {
+                background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #10b981, stop:1 #047857);
+                color: #ffffff;
+                font-size: 16px;
+                font-weight: bold;
+                border-radius: 8px;
+                border: 1px solid #34d399;
+            }
+            QPushButton:hover {
+                background-color: #10b981;
+                border: 1px solid #6ee7b7;
+            }
+            QPushButton:pressed {
+                background-color: #047857;
+            }
+            QPushButton:disabled {
+                background-color: #1e293b;
+                border: 1px solid #334155;
+                color: #64748b;
+            }
+        """)
         self.btn_start.clicked.connect(self._run_burn)
-        left_layout.addWidget(QLabel("SN 输入:"))
+        left_layout.addWidget(QLabel("<b>SN 序列号输入:</b>"))
         left_layout.addWidget(self.sn_input)
         left_layout.addWidget(self.btn_start)
 
@@ -986,10 +1215,10 @@ class MainWindow(QMainWindow):
             self.protocol.ser.close()
             self.protocol.ser = None
             self.btn_toggle_port.setText("打开串口")
-            self.btn_toggle_port.setStyleSheet("background-color: #2980b9; color: white;")
+            self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0284c7, stop:1 #0369a1); color: white; border-radius: 6px; font-weight: bold;")
             self.port_combo.setEnabled(True)
             self.btn_refresh_port.setEnabled(True)
-            self._burn_log("串口已关闭", "#e67e22")
+            self._burn_log("串口已关闭", "#f59e0b")
         else:
             current_port = self.port_combo.itemData(self.port_combo.currentIndex())
             if not current_port:
@@ -1002,10 +1231,10 @@ class MainWindow(QMainWindow):
                 self.serial_reader.data_received.connect(self._update_serial_monitor)
                 self.serial_reader.start()
                 self.btn_toggle_port.setText("关闭串口")
-                self.btn_toggle_port.setStyleSheet("background-color: #e74c3c; color: white;")
+                self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef4444, stop:1 #b91c1c); color: white; border-radius: 6px; font-weight: bold;")
                 self.port_combo.setEnabled(False)
                 self.btn_refresh_port.setEnabled(False)
-                self._burn_log(f"串口 {current_port} 已打开", "#2ecc71")
+                self._burn_log(f"串口 {current_port} 已成功打开", "#34d399")
             except Exception as e:
                 QMessageBox.critical(self, "串口错误", f"无法打开串口: {e}")
 
@@ -1099,15 +1328,16 @@ class MainWindow(QMainWindow):
 
     def _update_network_status(self):
         """更新网络状态显示"""
+        self.status_bar.setContentsMargins(10, 4, 10, 4)
         if self.network_status is None:
-            self.status_bar.setText("网络状态: 🔄 正在检查连接...")
-            self.status_bar.setStyleSheet("color: blue; font-weight: bold;")
+            self.status_bar.setText(" 网络状态: 🔄 正在检查连接...")
+            self.status_bar.setStyleSheet("color: #38bdf8; font-weight: bold; background-color: #1e293b; border-radius: 4px; padding: 4px;")
         elif self.network_status:
-            self.status_bar.setText("网络状态: ✅ 已连接到MinIO服务器")
-            self.status_bar.setStyleSheet("color: green; font-weight: bold;")
+            self.status_bar.setText(" 网络状态: ✅ 已成功连接到 MinIO 仓库")
+            self.status_bar.setStyleSheet("color: #34d399; font-weight: bold; background-color: #1e293b; border-radius: 4px; padding: 4px;")
         else:
-            self.status_bar.setText("网络状态: ❌ 无法连接到MinIO服务器")
-            self.status_bar.setStyleSheet("color: red; font-weight: bold;")
+            self.status_bar.setText(" 网络状态: ❌ 无法连接到 MinIO 仓库")
+            self.status_bar.setStyleSheet("color: #f87171; font-weight: bold; background-color: #1e293b; border-radius: 4px; padding: 4px;")
 
     def _async_check_network(self):
         """异步检查网络连接"""
@@ -1135,6 +1365,7 @@ class MainWindow(QMainWindow):
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
+    app.setStyleSheet(MODERN_INDUSTRIAL_QSS)
     window = MainWindow()
     window.show()
     # UI显示后异步检查网络连接
