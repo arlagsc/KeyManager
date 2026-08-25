@@ -229,12 +229,26 @@ def get_app_dir():
     return os.path.dirname(os.path.abspath(__file__))
 
 def load_config():
-    """加载本地配置文件"""
+    """加载本地配置文件，支持 platforms 分层结构并自动兼容旧版单层 key_types"""
     default_config = {
-        "key_types": ["HDCP1.4 5586 dev", "HDCP2.2 5586 dev",
-                       "HDCP1.4 5586 prod", "HDCP2.2 5586 prod",
-                       "ULPK 5586F dev", "ULPK 5586F prod",
-                       "ULPK 5586L dev", "ULPK 5586L prod"],
+        "platforms": {
+            "MTK": {
+                "key_types": [
+                    "HDCP1.4 5586 dev", "HDCP2.2 5586 dev",
+                    "HDCP1.4 5586 prod", "HDCP2.2 5586 prod",
+                    "ULPK 5586F dev", "ULPK 5586F prod",
+                    "ULPK 5586L dev", "ULPK 5586L prod"
+                ]
+            },
+            "Novatek": {
+                "key_types": [
+                    "HDCP1.4 NTK dev", "HDCP2.2 NTK dev",
+                    "HDCP1.4 NTK prod", "HDCP2.2 NTK prod",
+                    "ULPK NTK dev", "ULPK NTK prod"
+                ]
+            }
+        },
+        "default_platform": "MTK",
         "mac_clients": ["Vizio", "Onn"],
         "minio": {"endpoint": "172.16.9.28:9000", "access_key": "admin",
                   "secret_key": "12345678", "bucket": "warehouse"}
@@ -243,26 +257,84 @@ def load_config():
     if os.path.exists(config_path):
         try:
             with open(config_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
+                loaded = json.load(f)
+                # 兼容旧版本：若存在单层 key_types 且无 platforms，自动封装到 MTK 平台下
+                if "platforms" not in loaded and "key_types" in loaded:
+                    loaded["platforms"] = {
+                        "MTK": {"key_types": loaded.pop("key_types")}
+                    }
+                    if "default_platform" not in loaded:
+                        loaded["default_platform"] = "MTK"
+                return loaded
+        except Exception as e:
+            print(f"[WARN] 加载 config.json 失败: {e}，将使用默认配置")
             return default_config
     return default_config
 
 
+def get_platforms(config):
+    """获取所有已配置的芯片方案名称列表"""
+    if "platforms" in config and isinstance(config["platforms"], dict):
+        return list(config["platforms"].keys())
+    return ["MTK"]
+
+
+def get_platform_key_types(config, platform=None):
+    """获取指定方案的 Key 类型列表；若未指定则返回所有方案的 Key 类型合集"""
+    if "platforms" in config and isinstance(config["platforms"], dict):
+        if platform and platform in config["platforms"]:
+            return config["platforms"][platform].get("key_types", [])
+        # 未指定方案时，返回全部方案的去重 Key 列表
+        all_keys = []
+        for p_data in config["platforms"].values():
+            for kt in p_data.get("key_types", []):
+                if kt not in all_keys:
+                    all_keys.append(kt)
+        return all_keys
+    # 兼容旧版单一 key_types 列表
+    return config.get("key_types", [])
+
+
+def get_default_platform(config):
+    """获取默认芯片方案"""
+    default_p = config.get("default_platform")
+    platforms = get_platforms(config)
+    if default_p in platforms:
+        return default_p
+    return platforms[0] if platforms else "MTK"
+
+
+def get_key_platform(config, key_type):
+    """根据 Key 类型反查所属的芯片方案名称（如 MTK / Novatek / 通用）"""
+    if "platforms" in config and isinstance(config["platforms"], dict):
+        for p_name, p_data in config["platforms"].items():
+            if key_type in p_data.get("key_types", []):
+                return p_name
+    # 启发式后备判断
+    kt_upper = key_type.upper()
+    if "5586" in kt_upper or "MTK" in kt_upper:
+        return "MTK"
+    elif "NTK" in kt_upper or "NOVATEK" in kt_upper or "NOVATECH" in kt_upper:
+        return "Novatek"
+    return "-"
+
+
+
 # ============================================================
-# 烧录工作线程（从 prod_client.py 合并）
+# 烧录工作线程（支持多平台方案识别）
 # ============================================================
 class BurnWorker(QThread):
     log_signal = pyqtSignal(str, str)
     result_signal = pyqtSignal(bool, str)
 
-    def __init__(self, db, protocol, sn, task_list, config):
+    def __init__(self, db, protocol, sn, task_list, config, platform="MTK"):
         super().__init__()
         self.db = db
         self.protocol = protocol
         self.sn = sn
         self.task_list = task_list
         self.config = config
+        self.platform = platform
         self.monitor_signal = None
 
     def run(self):
@@ -272,7 +344,7 @@ class BurnWorker(QThread):
                 self.result_signal.emit(False, "网络连接失败：无法连接到MinIO服务器，请检查网络连接。")
                 return
 
-            self.log_signal.emit(f"--- 5586 全功能烧录启动: SN {self.sn} ---", "#ffffff")
+            self.log_signal.emit(f"--- [{self.platform}] 全功能烧录启动: SN {self.sn} ---", "#ffffff")
             # 进入工厂模式
             fac_cmd = self.protocol.pack_factory_mode()
             self.protocol.send_and_wait_ack(fac_cmd, monitor_signal=self.monitor_signal,
@@ -290,7 +362,7 @@ class BurnWorker(QThread):
                 if parts[0] == "mac":
                     cmd_type = parts[-1]  # 客户名，如 onn
                 elif len(parts) >= 3 and "ULPK" in parts[1].upper():
-                    cmd_type = parts[1]   # 如 "ULPK 5586L prod"
+                    cmd_type = parts[1]   # 如 "ULPK 5586L prod" 或 "ULPK NTK prod"
                 else:
                     cmd_type = parts[1] if len(parts) >= 2 else parts[-1]
 
@@ -367,8 +439,12 @@ class BurnWorker(QThread):
             for task_path, res_id in pending_moves:
                 self.db.move_to_used(task_path, res_id)
 
-            # 归档烧录记录
-            record_data = json.dumps({"sn": self.sn, "burn_results": burn_history}).encode('utf-8')
+            # 归档烧录记录（包含所属方案信息）
+            record_data = json.dumps({
+                "sn": self.sn,
+                "platform": self.platform,
+                "burn_results": burn_history
+            }, ensure_ascii=False).encode('utf-8')
             record_path = f"sn_record/{self.sn}.json"
             self.db.client.put_object(
                 self.db.bucket, record_path,
@@ -551,10 +627,19 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(20, 20, 20, 20)
 
         layout.addWidget(QLabel("<b>[2] Key 资源上传</b>"))
+        import_platform_layout = QHBoxLayout()
+        import_platform_layout.addWidget(QLabel("芯片方案:"))
+        self.import_platform_select = QComboBox()
+        self.import_platform_select.addItems(get_platforms(self.config))
+        self.import_platform_select.setCurrentText(get_default_platform(self.config))
+        self.import_platform_select.currentTextChanged.connect(self._on_import_platform_changed)
+        import_platform_layout.addWidget(self.import_platform_select, 1)
+        layout.addLayout(import_platform_layout)
+
         type_select_layout = QHBoxLayout()
         type_select_layout.addWidget(QLabel("Key 类型:"))
         self.key_type_select = QComboBox()
-        self.key_type_select.addItems(self.config.get("key_types", []))
+        self.key_type_select.addItems(get_platform_key_types(self.config, get_default_platform(self.config)))
         self.key_type_select.setEditable(True)
         type_select_layout.addWidget(self.key_type_select, 1)
         layout.addLayout(type_select_layout)
@@ -657,7 +742,7 @@ class MainWindow(QMainWindow):
         row_layout.setContentsMargins(0, 2, 0, 2)
 
         type_combo = QComboBox()
-        type_combo.addItems(self.config.get("key_types", []))
+        type_combo.addItems(get_platform_key_types(self.config))
         type_combo.setEditable(True)
         res_id_input = QLineEdit()
         res_id_input.setPlaceholderText("资源文件名 / ID")
@@ -804,27 +889,50 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(widget)
 
         filter_bar = QHBoxLayout()
+
+        # 芯片方案过滤
+        filter_bar.addWidget(QLabel("芯片方案:"))
+        self.view_platform_filter = QComboBox()
+        self.view_platform_filter.addItems(["全部方案"] + get_platforms(self.config))
+        self.view_platform_filter.currentTextChanged.connect(self._on_view_platform_changed)
+        filter_bar.addWidget(self.view_platform_filter)
+
+        filter_bar.addWidget(QLabel("类别:"))
         self.type_filter = QComboBox()
-        mac_clients = self.config.get("mac_clients", ["Vizio", "Onn"])
-        self.type_filter.addItems(["全部", "MAC (全部)"] + [f"MAC ({c})" for c in mac_clients])
-        self.type_filter.addItems(self.config.get("key_types", []))
+        self._update_view_type_filter("全部方案")
+        filter_bar.addWidget(self.type_filter)
+
+        filter_bar.addWidget(QLabel("状态:"))
         self.status_filter = QComboBox()
         self.status_filter.addItems(["全部状态", "待使用 (available)", "已使用 (used)"])
+        filter_bar.addWidget(self.status_filter)
+
+        filter_bar.addStretch()
         btn_refresh = QPushButton("刷新列表")
         btn_refresh.clicked.connect(self._refresh_inventory)
-        filter_bar.addWidget(QLabel("类别:"))
-        filter_bar.addWidget(self.type_filter)
-        filter_bar.addWidget(QLabel("状态:"))
-        filter_bar.addWidget(self.status_filter)
-        filter_bar.addStretch()
         filter_bar.addWidget(btn_refresh)
         layout.addLayout(filter_bar)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["分类", "子类型", "客户", "唯一标识 (ID)", "状态"])
+        self.table = QTableWidget(0, 6)
+        self.table.setHorizontalHeaderLabels(["芯片方案", "分类", "子类型", "客户", "唯一标识 (ID)", "状态"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
         return widget
+
+    def _on_view_platform_changed(self, platform_name):
+        """库存查询页面切换方案时，更新类别下拉框选项"""
+        self._update_view_type_filter(platform_name)
+
+    def _update_view_type_filter(self, platform_name):
+        """根据选中的方案更新类别下拉列表"""
+        self.type_filter.clear()
+        mac_clients = self.config.get("mac_clients", ["Vizio", "Onn"])
+        mac_items = ["MAC (全部)"] + [f"MAC ({c})" for c in mac_clients]
+
+        if platform_name == "全部方案":
+            self.type_filter.addItems(["全部"] + mac_items + get_platform_key_types(self.config))
+        else:
+            self.type_filter.addItems([f"全部 ({platform_name})"] + mac_items + get_platform_key_types(self.config, platform_name))
 
     # ==================== Tab 3: SN 追溯 ====================
     def _create_trace_tab(self):
@@ -884,6 +992,18 @@ class MainWindow(QMainWindow):
         # 任务勾选
         task_group = QGroupBox("2. 烧录任务")
         task_layout = QVBoxLayout()
+
+        # 芯片方案选择
+        platform_row = QHBoxLayout()
+        platform_row.addWidget(QLabel("芯片方案:"))
+        self.burn_platform_combo = QComboBox()
+        self.burn_platform_combo.addItems(get_platforms(self.config))
+        self.burn_platform_combo.setCurrentText(get_default_platform(self.config))
+        self.burn_platform_combo.currentTextChanged.connect(self._on_burn_platform_changed)
+        platform_row.addWidget(self.burn_platform_combo, 1)
+        platform_row.addStretch()
+        task_layout.addLayout(platform_row)
+
         client_row = QHBoxLayout()
         client_row.addWidget(QLabel("客户:"))
         self.client_combo = QComboBox()
@@ -895,11 +1015,15 @@ class MainWindow(QMainWindow):
         self.check_mac = QCheckBox("烧录 MAC")
         self.check_mac.setChecked(True)
         task_layout.addWidget(self.check_mac)
+
+        # 动态 Key 勾选容器
+        self.key_checks_container = QWidget()
+        self.key_checks_layout = QVBoxLayout(self.key_checks_container)
+        self.key_checks_layout.setContentsMargins(0, 0, 0, 0)
         self.key_checks = {}
-        for kt in self.config.get("key_types", []):
-            cb = QCheckBox(f"烧录 {kt}")
-            self.key_checks[kt] = cb
-            task_layout.addWidget(cb)
+        self._rebuild_key_checks(get_default_platform(self.config))
+        task_layout.addWidget(self.key_checks_container)
+
         task_group.setLayout(task_layout)
         left_layout.addWidget(task_group)
 
@@ -968,6 +1092,27 @@ class MainWindow(QMainWindow):
         self._refresh_serial_ports()
         return widget
 
+    def _on_import_platform_changed(self, platform_name):
+        """导入页面切换芯片方案时，刷新 Key 类型下拉列表"""
+        self.key_type_select.clear()
+        self.key_type_select.addItems(get_platform_key_types(self.config, platform_name))
+
+    def _on_burn_platform_changed(self, platform_name):
+        """烧录工具页面切换芯片方案时，重新构建 Key 复选框"""
+        self._rebuild_key_checks(platform_name)
+
+    def _rebuild_key_checks(self, platform_name):
+        """根据指定的芯片方案动态生成对应的 Key 复选框"""
+        for cb in self.key_checks.values():
+            cb.setParent(None)
+            cb.deleteLater()
+        self.key_checks.clear()
+
+        key_list = get_platform_key_types(self.config, platform_name)
+        for kt in key_list:
+            cb = QCheckBox(f"烧录 {kt}")
+            self.key_checks[kt] = cb
+            self.key_checks_layout.addWidget(cb)
 
     # ==================== 资源导入逻辑 ====================
     def _normalize_mac(self, mac_str):
@@ -1094,16 +1239,24 @@ class MainWindow(QMainWindow):
             return
 
         self.table.setRowCount(0)
+        sel_platform = self.view_platform_filter.currentText()
         sel_type = self.type_filter.currentText()
         sel_stat = self.status_filter.currentText()
 
         prefixes = []
-        if sel_type == "全部": prefixes = ["mac/", "key/"]
-        elif sel_type == "MAC (全部)": prefixes = ["mac/"]
+        if sel_type == "全部" or sel_type.startswith("全部 ("):
+            if sel_platform == "全部方案":
+                prefixes = ["mac/", "key/"]
+            else:
+                plat_keys = get_platform_key_types(self.config, sel_platform)
+                prefixes = [f"key/{kt}/" for kt in plat_keys] + ["mac/"]
+        elif sel_type == "MAC (全部)":
+            prefixes = ["mac/"]
         elif sel_type.startswith("MAC ("):
             client_name = sel_type.replace("MAC (", "").replace(")", "").strip().lower()
             prefixes = [f"mac/{client_name}/"]
-        else: prefixes = [f"key/{sel_type}/"]
+        else:
+            prefixes = [f"key/{sel_type}/"]
 
         stat_keywords = []
         if "待使用" in sel_stat: stat_keywords = ["available"]
@@ -1115,36 +1268,47 @@ class MainWindow(QMainWindow):
                 objs = self.db.client.list_objects(self.db.bucket, prefix=p, recursive=True)
                 for obj in objs:
                     if any(f"/{kw}/" in obj.object_name for kw in stat_keywords):
-                        self._add_row(obj.object_name)
+                        self._add_row(obj.object_name, sel_platform)
             except: continue
 
-    def _add_row(self, path):
+    def _add_row(self, path, sel_platform="全部方案"):
         parts = path.split('/')
         if len(parts) < 3: return
-        row = self.table.rowCount()
-        self.table.insertRow(row)
+
         main_type = parts[0].upper()
         status = "已使用" if "used" in path else "待使用"
         res_id = os.path.basename(path).split('.')[0]
         mac_clients = [c.lower() for c in self.config.get("mac_clients", ["Vizio", "Onn"])]
         client = ""
+
         if parts[0] == "mac":
+            platform = "通用"
             sub_type = "网络地址"
             if len(parts) >= 4 and parts[1].lower() in mac_clients:
                 client = parts[1].capitalize()
         else:
             sub_type = parts[1]
+            platform = get_key_platform(self.config, sub_type)
             for p in parts[2:]:
                 if p.lower() in mac_clients:
                     client = p.capitalize()
                     break
-        self.table.setItem(row, 0, QTableWidgetItem(main_type))
-        self.table.setItem(row, 1, QTableWidgetItem(sub_type))
-        self.table.setItem(row, 2, QTableWidgetItem(client))
-        self.table.setItem(row, 3, QTableWidgetItem(res_id))
+
+        # 若选择了特定方案且当前项为 Key，过滤掉不属于该方案的项
+        if sel_platform != "全部方案" and platform != "通用" and platform != sel_platform:
+            return
+
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+        self.table.setItem(row, 0, QTableWidgetItem(platform))
+        self.table.setItem(row, 1, QTableWidgetItem(main_type))
+        self.table.setItem(row, 2, QTableWidgetItem(sub_type))
+        self.table.setItem(row, 3, QTableWidgetItem(client))
+        self.table.setItem(row, 4, QTableWidgetItem(res_id))
         stat_item = QTableWidgetItem(status)
         if status == "待使用": stat_item.setForeground(Qt.GlobalColor.darkGreen)
-        self.table.setItem(row, 4, stat_item)
+        self.table.setItem(row, 5, stat_item)
 
     # ==================== SN 追溯逻辑 ====================
     def _query_sn_history(self):
@@ -1302,7 +1466,8 @@ class MainWindow(QMainWindow):
             self.serial_reader = None
 
         self.protocol.port = current_port
-        self.worker = BurnWorker(self.db, self.protocol, sn, tasks, self.config)
+        platform = self.burn_platform_combo.currentText().strip()
+        self.worker = BurnWorker(self.db, self.protocol, sn, tasks, self.config, platform=platform)
         self.worker.monitor_signal = self.monitor_data_signal
         self.worker.log_signal.connect(self._burn_log)
         self.worker.result_signal.connect(self._on_burn_finished)

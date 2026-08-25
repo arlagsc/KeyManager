@@ -135,11 +135,14 @@ class TVSerialProtocol:
 
     def pack_ulpk_command(self, uid_str, ulpk_data):
         """
-        5586 ULPK 烧录指令，cmd_id=0xD1。
-        MFC: strUlpkPotk = "07 51 01 AB D1 " + [UID 4字节] + [160字节data] + "00 00" → clrCRC
-        注意: 0xAB 是帧总长度，0xD1 是 cmd_id。
+        ULPK 烧录指令，cmd_id=0xD1。
+        通用格式: 07 51 01 [总长度] D1 [UID 4字节] [ULPK二进制数据] [CRC16]
+        总长度与 CRC 均自动根据实际 ULPK 数据长度动态计算。
         """
-        uid_int = int(uid_str)
+        try:
+            uid_int = int(uid_str)
+        except Exception:
+            uid_int = 0
         uid_bytes = struct.pack(">I", uid_int)
         payload = uid_bytes + ulpk_data
         return self.build_command(0xD1, payload)
