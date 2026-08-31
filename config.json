@@ -18,7 +18,19 @@
                 "ULPK NTK HD prod 30M",
                 "ULPK NTK FHD dev 40M",
                 "ULPK NTK FHD prod 40M"
-            ]
+            ],
+            "client_key_types": {
+                "Vizio": [
+                    "ULPK NTK vizio dev 20M",
+                    "ULPK NTK vizio prod 20M"
+                ],
+                "Onn": [
+                    "ULPK NTK HD dev 30M",
+                    "ULPK NTK HD prod 30M",
+                    "ULPK NTK FHD dev 40M",
+                    "ULPK NTK FHD prod 40M"
+                ]
+            }
         }
     },
     "default_platform": "MTK",

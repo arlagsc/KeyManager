@@ -117,7 +117,30 @@ graph TD
   - 已将 `PyQt6`、`minio`、`pyserial`、`urllib3` 等所有运行时依赖库完整嵌套整合在 `.exe` 内部。
   - 同步将 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 复制至 `dist/` 交付目录。
 - **跨电脑兼容性验证**：
-  - 启动测试验证通过，`KeyManager.exe` 进程独立拉起无崩溃、无依赖缺失，拷贝包含 `KeyManager.exe` 与 `config.json` 的 `dist` 目录至任意 Win10/Win11 电脑均可免安装即点即用。
+
+### 2026-08-31 (Novatek 芯片方案下按客户动态切换 Key 类型)
+
+#### 1. 变更说明
+- **需求**：
+  - 当芯片方案为 Novatek 且客户为 **Onn** 时，Key 类型维持现有规格 (`ULPK NTK HD dev 30M`, `ULPK NTK HD prod 30M`, `ULPK NTK FHD dev 40M`, `ULPK NTK FHD prod 40M`)。
+  - 当芯片方案为 Novatek 且客户为 **Vizio** 时，Key 类型自动切换为 20M 规格 (`ULPK NTK vizio dev 20M` 和 `ULPK NTK vizio prod 20M`)。
+
+#### 2. 修改细节
+- **[config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/config.json) & [dist/config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json)**：
+  - 在 `platforms.Novatek` 字段下加入 `client_key_types` 配置字典，明确映射 `Vizio` 与 `Onn` 对应的 Key 类型列表。
+- **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+  - `default_config`：同步内嵌 `Novatek` 的 `client_key_types` 默认定义。
+  - `get_platform_key_types(config, platform, client)`：函数签名及逻辑升级，增加 `client` 参数；指定客户时优先从 `client_key_types` 查出专属类型，无匹配或未指定时退回 `key_types` 默认列表。
+  - `get_key_platform(config, key_type)`：扩展反查逻辑，支持从 `client_key_types` 正确识别 `ULPK NTK vizio dev 20M` 所属的 `Novatek` 芯片平台。
+  - `_create_import_tab()` & `_on_import_platform_changed()`：绑定客户选择下拉框 (`key_client_select`) 的变更事件，切换客户时自动联动刷新 Key 类型下拉菜单 (`key_type_select`)。
+  - `_create_burn_tab()` & `_rebuild_key_checks()`：绑定烧录工具页面的客户选择下拉框 (`client_combo`) 变更事件，切换客户时动态重新构建相应的烧录复选框列表。
+
+#### 4. 可执行文件打包与交付 (v4.7)
+- **版本升级**：[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py) 主窗口标题升级为 `Key/MAC 烧录管理系统 - v4.7`。
+- **打包部署**：
+  - 使用 PyInstaller 读取 [KeyManager.spec](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/KeyManager.spec) 重新编译打包生成独立 `.exe`：[KeyManager.exe](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/KeyManager.exe)。
+  - 已自动包含 `PyQt6`、`minio`、`pyserial`、`urllib3` 等全部运行时依赖项。
+  - 同步更新并将 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 复制至 `dist/` 交付目录，保证跨电脑免安装即点即用。
 
 
 

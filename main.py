@@ -257,10 +257,23 @@ def load_config():
             },
             "Novatek": {
                 "key_types": [
-                    "HDCP1.4 NTK dev", "HDCP2.2 NTK dev",
-                    "HDCP1.4 NTK prod", "HDCP2.2 NTK prod",
-                    "ULPK NTK dev", "ULPK NTK prod"
-                ]
+                    "ULPK NTK HD dev 30M",
+                    "ULPK NTK HD prod 30M",
+                    "ULPK NTK FHD dev 40M",
+                    "ULPK NTK FHD prod 40M"
+                ],
+                "client_key_types": {
+                    "Vizio": [
+                        "ULPK NTK vizio dev 20M",
+                        "ULPK NTK vizio prod 20M"
+                    ],
+                    "Onn": [
+                        "ULPK NTK HD dev 30M",
+                        "ULPK NTK HD prod 30M",
+                        "ULPK NTK FHD dev 40M",
+                        "ULPK NTK FHD prod 40M"
+                    ]
+                }
             }
         },
         "default_platform": "MTK",
@@ -294,15 +307,35 @@ def get_platforms(config):
     return ["MTK"]
 
 
-def get_platform_key_types(config, platform=None):
-    """获取指定方案的 Key 类型列表；若未指定则返回所有方案的 Key 类型合集"""
+def get_platform_key_types(config, platform=None, client=None):
+    """获取指定方案和客户的 Key 类型列表；若未指定则返回按规则处理后的 Key 类型合集"""
     if "platforms" in config and isinstance(config["platforms"], dict):
         if platform and platform in config["platforms"]:
-            return config["platforms"][platform].get("key_types", [])
+            p_data = config["platforms"][platform]
+            if client and "client_key_types" in p_data and isinstance(p_data["client_key_types"], dict):
+                client_lower = str(client).strip().lower()
+                for c_name, c_keys in p_data["client_key_types"].items():
+                    if c_name.strip().lower() == client_lower:
+                        return c_keys
+            return p_data.get("key_types", [])
         # 未指定方案时，返回全部方案的去重 Key 列表
         all_keys = []
         for p_data in config["platforms"].values():
-            for kt in p_data.get("key_types", []):
+            keys_to_add = []
+            if client and "client_key_types" in p_data and isinstance(p_data["client_key_types"], dict):
+                client_lower = str(client).strip().lower()
+                for c_name, c_keys in p_data["client_key_types"].items():
+                    if c_name.strip().lower() == client_lower:
+                        keys_to_add = c_keys
+                        break
+            if not keys_to_add:
+                keys_to_add = p_data.get("key_types", [])
+                if "client_key_types" in p_data and isinstance(p_data["client_key_types"], dict):
+                    for c_keys in p_data["client_key_types"].values():
+                        for kt in c_keys:
+                            if kt not in keys_to_add:
+                                keys_to_add.append(kt)
+            for kt in keys_to_add:
                 if kt not in all_keys:
                     all_keys.append(kt)
         return all_keys
@@ -325,6 +358,10 @@ def get_key_platform(config, key_type):
         for p_name, p_data in config["platforms"].items():
             if key_type in p_data.get("key_types", []):
                 return p_name
+            if "client_key_types" in p_data and isinstance(p_data["client_key_types"], dict):
+                for c_keys in p_data["client_key_types"].values():
+                    if key_type in c_keys:
+                        return p_name
     # 启发式后备判断
     kt_upper = key_type.upper()
     if "5586" in kt_upper or "MTK" in kt_upper:
@@ -571,7 +608,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.6")
+        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.7")
         self.resize(1100, 800)
 
         # 初始化 MinIO
@@ -663,6 +700,7 @@ class MainWindow(QMainWindow):
         key_client_layout.addWidget(QLabel("客户 (ULPK):"))
         self.key_client_select = QComboBox()
         self.key_client_select.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        self.key_client_select.currentTextChanged.connect(self._on_import_platform_changed)
         key_client_layout.addWidget(self.key_client_select, 1)
         layout.addLayout(key_client_layout)
 
@@ -1023,6 +1061,7 @@ class MainWindow(QMainWindow):
         client_row.addWidget(QLabel("客户:"))
         self.client_combo = QComboBox()
         self.client_combo.addItems(self.config.get("mac_clients", ["Vizio", "Onn"]))
+        self.client_combo.currentTextChanged.connect(self._on_burn_platform_changed)
         client_row.addWidget(self.client_combo, 1)
         client_row.addStretch()
         task_layout.addLayout(client_row)
@@ -1107,23 +1146,29 @@ class MainWindow(QMainWindow):
         self._refresh_serial_ports()
         return widget
 
-    def _on_import_platform_changed(self, platform_name):
-        """导入页面切换芯片方案时，刷新 Key 类型下拉列表"""
+    def _on_import_platform_changed(self, *args):
+        """导入页面切换芯片方案或客户时，刷新 Key 类型下拉列表"""
+        platform_name = self.import_platform_select.currentText()
+        client_name = self.key_client_select.currentText() if hasattr(self, 'key_client_select') else None
         self.key_type_select.clear()
-        self.key_type_select.addItems(get_platform_key_types(self.config, platform_name))
+        self.key_type_select.addItems(get_platform_key_types(self.config, platform_name, client_name))
 
-    def _on_burn_platform_changed(self, platform_name):
-        """烧录工具页面切换芯片方案时，重新构建 Key 复选框"""
-        self._rebuild_key_checks(platform_name)
+    def _on_burn_platform_changed(self, *args):
+        """烧录工具页面切换芯片方案或客户时，重新构建 Key 复选框"""
+        self._rebuild_key_checks()
 
-    def _rebuild_key_checks(self, platform_name):
-        """根据指定的芯片方案动态生成对应的 Key 复选框"""
+    def _rebuild_key_checks(self, platform_name=None):
+        """根据指定的芯片方案与客户动态生成对应的 Key 复选框"""
         for cb in self.key_checks.values():
             cb.setParent(None)
             cb.deleteLater()
         self.key_checks.clear()
 
-        key_list = get_platform_key_types(self.config, platform_name)
+        if platform_name is None or not isinstance(platform_name, str):
+            platform_name = self.burn_platform_combo.currentText()
+        client_name = self.client_combo.currentText() if hasattr(self, 'client_combo') else None
+
+        key_list = get_platform_key_types(self.config, platform_name, client_name)
         for kt in key_list:
             cb = QCheckBox(f"烧录 {kt}")
             self.key_checks[kt] = cb
