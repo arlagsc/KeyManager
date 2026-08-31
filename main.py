@@ -103,8 +103,23 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: top right;
-    width: 20px;
+    width: 26px;
     border-left-width: 0px;
+    border-top-right-radius: 6px;
+    border-bottom-right-radius: 6px;
+}
+
+QComboBox::down-arrow {
+    width: 0px;
+    height: 0px;
+    border-left: 5px solid transparent;
+    border-right: 5px solid transparent;
+    border-top: 6px solid #94a3b8;
+    margin-right: 8px;
+}
+
+QComboBox::down-arrow:hover {
+    border-top-color: #38bdf8;
 }
 
 QComboBox QAbstractItemView {
@@ -556,7 +571,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.4")
+        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.6")
         self.resize(1100, 800)
 
         # 初始化 MinIO
@@ -640,7 +655,7 @@ class MainWindow(QMainWindow):
         type_select_layout.addWidget(QLabel("Key 类型:"))
         self.key_type_select = QComboBox()
         self.key_type_select.addItems(get_platform_key_types(self.config, get_default_platform(self.config)))
-        self.key_type_select.setEditable(True)
+        self.key_type_select.setEditable(False)
         type_select_layout.addWidget(self.key_type_select, 1)
         layout.addLayout(type_select_layout)
 
@@ -743,7 +758,7 @@ class MainWindow(QMainWindow):
 
         type_combo = QComboBox()
         type_combo.addItems(get_platform_key_types(self.config))
-        type_combo.setEditable(True)
+        type_combo.setEditable(False)
         res_id_input = QLineEdit()
         res_id_input.setPlaceholderText("资源文件名 / ID")
         btn_remove = QPushButton("删除")

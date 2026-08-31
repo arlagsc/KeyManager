@@ -90,6 +90,37 @@ graph TD
 - **ULPK 动态长度与容错验证**：
   - ULPK 长度在 244 字节以内均可自动根据实际文件大小计算帧长与 CRC16，无硬编码限制。
 - **MTK 仓库保护验证**：原有 MTK 存储路径 `key/HDCP1.4 5586 dev/...` 保持完全一致，无任何破坏性变动。
+- **可执行文件打包与交付 (v4.5)**：
+  - 窗口标题与系统版本升级至 `v4.5`；
+  - 使用 PyInstaller 6.19.0 将应用成功打包为独立单文件可执行程序：[KeyManager.exe](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/KeyManager.exe)；
+  - 自动集成 PyQt6、MinIO、PySerial 等全部运行依赖，并复制 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 至目标目录，可直接分发到其他电脑运行。
+
+### 2026-08-31 (资源导入界面 Key 类型下拉选择修复)
+
+#### 1. 变更说明
+- **问题**：在“资源导入”界面中，管理员反映“Key 类型”缺乏下拉选择交互，表现为点击组件区域无法直接弹出下拉菜单项。
+- **原因分析**：
+  1. `self.key_type_select` 原本开启了 `setEditable(True)`，在 PyQt6 中导致鼠标点击主框区域时仅聚焦文本光标，而不会直接触发下拉菜单展示；
+  2. `MODERN_INDUSTRIAL_QSS` 样式表中仅配置了 `QComboBox::drop-down` 边框，缺少 `QComboBox::down-arrow`（下拉小三角图标），导致所有 `QComboBox` 组件均未显示右侧下拉小箭头，用户缺乏直观视觉引导。
+
+#### 2. 修改细节
+- **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+  - 完善 `MODERN_INDUSTRIAL_QSS` 中 `QComboBox::down-arrow` 及 `:hover` 伪类样式，使用 CSS 边框属性渲染出微发光亮蓝色下拉小三角图标；
+  - 将 `_create_import_tab()` 中的 `self.key_type_select` 修改为 `setEditable(False)` 标准下拉菜单模式，点击框内任意位置即可直接展开选项列表；
+  - 将 `_add_manual_key_row()` 中的 `type_combo` 修改为 `setEditable(False)`，保持全界面交互体验一致。
+
+#### 3. 验证结果
+#### 4. 可执行文件打包与交付 (v4.6)
+- **版本升级**：[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py) 主窗口标题升级为 `Key/MAC 烧录管理系统 - v4.6`。
+- **打包部署**：
+  - 使用 PyInstaller 读取 [KeyManager.spec](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/KeyManager.spec) 重新编译生成独立 `.exe`：[KeyManager.exe](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/KeyManager.exe)（文件大小约为 42.9 MB）。
+  - 已将 `PyQt6`、`minio`、`pyserial`、`urllib3` 等所有运行时依赖库完整嵌套整合在 `.exe` 内部。
+  - 同步将 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 复制至 `dist/` 交付目录。
+- **跨电脑兼容性验证**：
+  - 启动测试验证通过，`KeyManager.exe` 进程独立拉起无崩溃、无依赖缺失，拷贝包含 `KeyManager.exe` 与 `config.json` 的 `dist` 目录至任意 Win10/Win11 电脑均可免安装即点即用。
+
+
+
 
 
 
