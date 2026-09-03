@@ -3,7 +3,6 @@ import io
 import json
 import socket
 from minio import Minio
-from minio.error import S3Error
 from minio.commonconfig import CopySource
 
 class MinioWarehouse:
@@ -47,7 +46,7 @@ class MinioWarehouse:
             try:
                 self.client.stat_object(self.bucket, object_name)
                 return True
-            except:
+            except Exception:
                 continue
         return False
 
@@ -111,31 +110,6 @@ class MinioWarehouse:
                 # copy 失败(通常源已被其他工位移走)，继续尝试下一个候选
                 print(f"锁定资源 {filename} 失败: {e}")
         return None
-
-    def peek_available(self, res_type):
-        """只获取第一个 available 资源的文件名，不移动"""
-        self._ensure_bucket()
-        res_type = res_type.lower()
-        prefix = f"{res_type}/available/"
-        objects = self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
-        for obj in objects:
-            return os.path.basename(obj.object_name)
-        return None
-
-    def move_to_used(self, res_type, filename):
-        """将指定资源从 available 移到 used"""
-        self._ensure_bucket()
-        res_type = res_type.lower()
-        src = f"{res_type}/available/{filename}"
-        dst = f"{res_type}/used/{filename}"
-        try:
-            source = CopySource(self.bucket, src)
-            self.client.copy_object(self.bucket, dst, source)
-            self.client.remove_object(self.bucket, src)
-            return True
-        except Exception as e:
-            print(f"移动资源失败: {e}")
-            return False
 
     def restore_available(self, res_type, filename):
         """烧录失败补偿：将已锁定(used)的资源回移到 available"""

@@ -739,7 +739,7 @@ class MainWindow(QMainWindow):
         self._update_network_status()
         layout.addWidget(self.status_bar)
 
-    # ==================== Tab 1: 资源导入 ====================
+    # ==================== Tab 2: 资源导入 ====================
     def _create_import_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -816,6 +816,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(network_layout)
 
         return widget
+    # ==================== Tab 1: 手动录入 ====================
     def _create_manual_record_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -974,9 +975,7 @@ class MainWindow(QMainWindow):
                 errors.append(f"Key [{key_type}] {res_id} 未在 available 中找到，已直接记录")
             burn_results[key_type] = res_id
 
-        if not burn_results:
-            # SN 是唯一必填项，MAC/Key 都是选填
-            pass
+        # SN 是唯一必填项，MAC/Key 均为选填，仅录入 SN 也允许
 
         # 写入 sn_record
         burn_results["SN"] = sn
@@ -1009,7 +1008,7 @@ class MainWindow(QMainWindow):
         src = f"{res_path}/available/{filename}"
         try:
             self.db.client.stat_object(self.db.bucket, src)
-        except:
+        except Exception:
             # 精确匹配失败，按前缀模糊搜索
             src = None
             prefix = f"{res_path}/available/{filename}"
@@ -1017,7 +1016,7 @@ class MainWindow(QMainWindow):
                 for obj in self.db.client.list_objects(self.db.bucket, prefix=prefix, recursive=True):
                     src = obj.object_name
                     break
-            except:
+            except Exception:
                 pass
             if not src:
                 return False
@@ -1027,10 +1026,10 @@ class MainWindow(QMainWindow):
             self.db.client.copy_object(self.db.bucket, dst, source)
             self.db.client.remove_object(self.db.bucket, src)
             return True
-        except:
+        except Exception:
             return False
 
-    # ==================== Tab 2: 库存查询 ====================
+    # ==================== Tab 3: 库存查询 ====================
     def _create_view_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -1111,7 +1110,7 @@ class MainWindow(QMainWindow):
 
         self.type_filter.addItems([header_text] + mac_items + key_list)
 
-    # ==================== Tab 3: SN 追溯 ====================
+    # ==================== Tab 4: SN 追溯 ====================
     def _create_trace_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
@@ -1141,7 +1140,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.raw_json_view)
         return widget
 
-    # ==================== Tab 4: 烧录工具 ====================
+    # ==================== Tab 0: 烧录工具 ====================
     def _create_burn_tab(self):
         widget = QWidget()
         main_h_layout = QHBoxLayout(widget)
@@ -1518,7 +1517,8 @@ class MainWindow(QMainWindow):
                 for obj in objs:
                     if any(f"/{kw}/" in obj.object_name for kw in stat_keywords):
                         self._add_row(obj.object_name, sel_platform, sel_client)
-            except: continue
+            except Exception:
+                continue
 
     def _add_row(self, path, sel_platform="全部方案", sel_client="全部客户"):
         parts = path.split('/')
@@ -1592,7 +1592,8 @@ class MainWindow(QMainWindow):
                     response.close()
                     response.release_conn()
                     break
-                except: continue
+                except Exception:
+                    continue
             if data is None:
                 raise FileNotFoundError("未找到")
             self.raw_json_view.setPlainText(json.dumps(data, indent=4, ensure_ascii=False))
@@ -1693,7 +1694,7 @@ class MainWindow(QMainWindow):
             try:
                 self.db.client.stat_object(self.db.bucket, path)
                 return True
-            except:
+            except Exception:
                 continue
         return False
 
