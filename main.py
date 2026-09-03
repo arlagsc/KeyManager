@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidgetItem, QHeaderView, QSpinBox, QLabel,
                              QMessageBox, QTabWidget, QComboBox, QFileDialog,
                              QPlainTextEdit, QCheckBox, QGroupBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QFont
 
 # ============================================================
@@ -373,6 +373,24 @@ def get_key_platform(config, key_type):
 
 
 # ============================================================
+# 后台网络检测线程（socket 探测放到子线程，避免 UI 卡顿）
+# ============================================================
+class _NetCheckWorker(QThread):
+    result_ready = pyqtSignal(bool)
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+    def run(self):
+        try:
+            ok = self.db.check_network_connection()
+        except Exception:
+            ok = False
+        self.result_ready.emit(ok)
+
+
+# ============================================================
 # 烧录工作线程（支持多平台方案识别）
 # ============================================================
 class BurnWorker(QThread):
@@ -674,8 +692,18 @@ class MainWindow(QMainWindow):
             bucket=m_cfg.get("bucket", "warehouse")
         )
 
-        # 初始化网络状态为未知，稍后异步检查
+        # 初始化网络状态为未知，稍后由后台线程异步检查
         self.network_status = None
+        self._net_checking = False
+        self._pending_manual_check = False
+        self._first_net_check_done = False
+        self._last_net_check_ts = 0.0
+        self._net_worker = None
+
+        # 周期后台网络检查（每 10 秒一次，运行在子线程，不阻塞 UI）
+        self._net_timer = QTimer(self)
+        self._net_timer.timeout.connect(self._maybe_periodic_net_check)
+        self._net_timer.start(10000)
 
         # 初始化串口协议
         self.protocol = TVSerialProtocol()
@@ -877,8 +905,7 @@ class MainWindow(QMainWindow):
     def _submit_manual_record(self):
         """提交手动录入记录"""
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         sn = self.manual_sn.text().strip()
@@ -1321,8 +1348,7 @@ class MainWindow(QMainWindow):
 
     def _handle_batch_mac_upload(self):
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         raw_mac = self.start_mac_input.text().strip()
@@ -1343,8 +1369,7 @@ class MainWindow(QMainWindow):
 
     def _handle_key_upload(self, is_batch=False):
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         key_type = self.key_type_select.currentText().strip()
@@ -1432,8 +1457,7 @@ class MainWindow(QMainWindow):
     # ==================== 库存查询逻辑 ====================
     def _refresh_inventory(self):
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         self.table.setRowCount(0)
@@ -1525,8 +1549,7 @@ class MainWindow(QMainWindow):
     # ==================== SN 追溯逻辑 ====================
     def _query_sn_history(self):
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         sn = self.trace_sn_input.text().strip()
@@ -1632,8 +1655,7 @@ class MainWindow(QMainWindow):
 
     def _run_burn(self):
         # 检查网络连接
-        if not self.db.check_network_connection():
-            QMessageBox.critical(self, "网络错误", "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+        if not self._require_network():
             return
 
         current_port = self.port_combo.itemData(self.port_combo.currentIndex())
@@ -1730,28 +1752,62 @@ class MainWindow(QMainWindow):
             self.status_bar.setText(" 网络状态: ❌ 无法连接到 MinIO 仓库")
             self.status_bar.setStyleSheet("color: #f87171; font-weight: bold; background-color: #1e293b; border-radius: 4px; padding: 4px;")
 
-    def _async_check_network(self):
-        """异步检查网络连接"""
-        try:
+    def _start_network_check(self, manual=False):
+        """启动一次后台网络检查（同一时刻最多一个在途检查，不阻塞 UI）"""
+        if manual:
+            self._pending_manual_check = True
+        if self._net_checking:
+            return
+        self._net_checking = True
+        self.network_status = None
+        self._update_network_status()
+        self._net_worker = _NetCheckWorker(self.db)
+        self._net_worker.result_ready.connect(self._on_network_check_done)
+        self._net_worker.finished.connect(self._net_worker.deleteLater)
+        self._net_worker.start()
+
+    def _on_network_check_done(self, ok):
+        """后台检查完成回调（运行于主线程）"""
+        self._net_checking = False
+        self.network_status = ok
+        self._last_net_check_ts = time.time()
+        self._update_network_status()
+
+        if self._pending_manual_check:
+            # 手动点击"检查连接"，给出明确的即时弹窗反馈
+            self._pending_manual_check = False
+            if ok:
+                QMessageBox.information(self, "网络检查", "✅ 网络连接正常！")
+            else:
+                QMessageBox.warning(self, "网络检查", "❌ 无法连接到MinIO服务器！\n请检查网络连接。")
+        elif not ok and not self._first_net_check_done:
+            # 仅程序启动后的首次检查失败时提醒一次，之后由状态栏持续提示
+            QMessageBox.warning(self, "网络连接警告",
+                "无法连接到MinIO服务器！\n\n请检查：\n1. 网络连接是否正常\n2. MinIO服务器是否运行\n3. 服务器地址和端口是否正确\n\n程序将继续运行，但网络相关功能将不可用。")
+        self._first_net_check_done = True
+
+    def _maybe_periodic_net_check(self):
+        """周期定时器：距上次检查超过 10 秒则再发起一次后台检查"""
+        if self._net_checking:
+            return
+        if time.time() - self._last_net_check_ts >= 10:
+            self._start_network_check()
+
+    def _require_network(self):
+        """操作前网络守卫：优先使用后台缓存状态，避免每个操作都在 UI 线程同步探测。
+        仅当从未获得过检查结果(None)时同步探测一次。"""
+        if self.network_status is None:
             self.network_status = self.db.check_network_connection()
             self._update_network_status()
-
-            if not self.network_status:
-                QMessageBox.warning(self, "网络连接警告",
-                    "无法连接到MinIO服务器！\n\n请检查：\n1. 网络连接是否正常\n2. MinIO服务器是否运行\n3. 服务器地址和端口是否正确\n\n程序将继续运行，但网络相关功能将不可用。")
-        except Exception as e:
-            self.network_status = False
-            self._update_network_status()
-            QMessageBox.warning(self, "网络检查错误", f"网络检查过程中发生错误：{e}")
+        if not self.network_status:
+            QMessageBox.critical(self, "网络错误",
+                "无法连接到MinIO服务器！\n请检查网络连接后重试。")
+            return False
+        return True
 
     def _check_network_status(self):
-        """手动检查网络状态"""
-        self.network_status = self.db.check_network_connection()
-        self._update_network_status()
-        if self.network_status:
-            QMessageBox.information(self, "网络检查", "✅ 网络连接正常！")
-        else:
-            QMessageBox.warning(self, "网络检查", "❌ 无法连接到MinIO服务器！\n请检查网络连接。")
+        """手动检查网络状态（后台执行，完成后弹窗反馈）"""
+        self._start_network_check(manual=True)
 
 
 if __name__ == "__main__":
@@ -1759,7 +1815,6 @@ if __name__ == "__main__":
     app.setStyleSheet(MODERN_INDUSTRIAL_QSS)
     window = MainWindow()
     window.show()
-    # UI显示后异步检查网络连接
-    from PyQt6.QtCore import QTimer
-    QTimer.singleShot(100, window._async_check_network)
+    # UI 显示后由后台线程检查网络连接（不阻塞界面）
+    QTimer.singleShot(100, window._start_network_check)
     sys.exit(app.exec())
