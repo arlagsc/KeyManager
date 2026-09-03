@@ -689,7 +689,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.config = load_config()
-        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.7")
+        self.setWindowTitle("Key/MAC 烧录管理系统 - v4.8")
         self.resize(1100, 800)
 
         # 初始化 MinIO

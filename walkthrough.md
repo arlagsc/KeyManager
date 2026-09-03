@@ -233,6 +233,13 @@ graph TD
 - **验证结果**：
   - 静态编译无报错，自动化回归测试覆盖库存查询联动场景全部通过（Exit Code 0）。
 
+#### 2. 可执行文件打包与交付 (v4.8)
+- **版本升级**：[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py) 主窗口标题升级为 `Key/MAC 烧录管理系统 - v4.8`。
+- **打包部署**：
+  - 使用 PyInstaller 6.19.0 读取 [KeyManager.spec](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/KeyManager.spec) 重新编译生成独立单文件可执行程序：[KeyManager.exe](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/KeyManager.exe)（文件体积约为 42.9 MB）；
+  - 已将 `PyQt6`、`minio`、`pyserial`、`urllib3` 等所有底层运行时依赖完整内嵌打包进可执行文件中，无需目标电脑安装 Python 环境；
+  - 同步将最新的 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 复制至 `dist/` 交付目录，并一并打包为独立免安装便携压缩包 `dist/key管理软件V4.8.zip`（体积约 42.6 MB），方便直接拷往产线任意 Windows 电脑解压即用。
+
 
 
 
