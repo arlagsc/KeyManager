@@ -1606,6 +1606,29 @@ class MainWindow(QMainWindow):
             self.port_combo.addItem(f"{p.device} ({p.description})", p.device)
         self.btn_start.setEnabled(True)
 
+    def _refresh_serial_ui_state(self):
+        """根据串口真实开闭状态同步按钮文本/样式/可用性，并维护监控线程。
+
+        烧录 worker 可能自行打开或异常关闭串口，任务结束后必须调用本方法复位 UI，
+        避免按钮显示与实际串口状态脱节。
+        """
+        self.btn_toggle_port.setEnabled(True)
+        self.btn_refresh_port.setEnabled(True)
+        if self.protocol.ser and self.protocol.ser.is_open:
+            if not self.serial_reader:
+                self.serial_reader = SerialReaderThread(self.protocol.ser)
+                self.serial_reader.data_received.connect(self._update_serial_monitor)
+                self.serial_reader.start()
+            self.btn_toggle_port.setText("关闭串口")
+            self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef4444, stop:1 #b91c1c); color: white; border-radius: 6px; font-weight: bold;")
+            self.port_combo.setEnabled(False)
+            self.btn_refresh_port.setEnabled(False)
+        else:
+            self.btn_toggle_port.setText("打开串口")
+            self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0284c7, stop:1 #0369a1); color: white; border-radius: 6px; font-weight: bold;")
+            self.port_combo.setEnabled(True)
+            self.btn_refresh_port.setEnabled(True)
+
     def _toggle_serial_port(self):
         if self.protocol.ser and self.protocol.ser.is_open:
             if self.serial_reader:
@@ -1613,10 +1636,7 @@ class MainWindow(QMainWindow):
                 self.serial_reader = None
             self.protocol.ser.close()
             self.protocol.ser = None
-            self.btn_toggle_port.setText("打开串口")
-            self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0284c7, stop:1 #0369a1); color: white; border-radius: 6px; font-weight: bold;")
-            self.port_combo.setEnabled(True)
-            self.btn_refresh_port.setEnabled(True)
+            self._refresh_serial_ui_state()
             self._burn_log("串口已关闭", "#f59e0b")
         else:
             current_port = self.port_combo.itemData(self.port_combo.currentIndex())
@@ -1629,10 +1649,7 @@ class MainWindow(QMainWindow):
                 self.serial_reader = SerialReaderThread(self.protocol.ser)
                 self.serial_reader.data_received.connect(self._update_serial_monitor)
                 self.serial_reader.start()
-                self.btn_toggle_port.setText("关闭串口")
-                self.btn_toggle_port.setStyleSheet("background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #ef4444, stop:1 #b91c1c); color: white; border-radius: 6px; font-weight: bold;")
-                self.port_combo.setEnabled(False)
-                self.btn_refresh_port.setEnabled(False)
+                self._refresh_serial_ui_state()
                 self._burn_log(f"串口 {current_port} 已成功打开", "#34d399")
             except Exception as e:
                 QMessageBox.critical(self, "串口错误", f"无法打开串口: {e}")
@@ -1706,6 +1723,10 @@ class MainWindow(QMainWindow):
 
         self.btn_start.setEnabled(False)
         self.sn_input.setEnabled(False)
+        # 烧录期间禁止操作串口开关/刷新/切换，避免与烧录线程并发读写串口
+        self.btn_toggle_port.setEnabled(False)
+        self.btn_refresh_port.setEnabled(False)
+        self.port_combo.setEnabled(False)
         self.burn_log.clear()
 
         if self.serial_reader:
@@ -1727,10 +1748,8 @@ class MainWindow(QMainWindow):
         self.sn_input.clear()
         self.sn_input.setFocus()
 
-        if self.protocol.ser and self.protocol.ser.is_open and not self.serial_reader:
-            self.serial_reader = SerialReaderThread(self.protocol.ser)
-            self.serial_reader.data_received.connect(self._update_serial_monitor)
-            self.serial_reader.start()
+        # 复位串口控件可用性，并按真实开关状态刷新按钮显示与监控线程
+        self._refresh_serial_ui_state()
 
         if success:
             self._burn_log(f"\n[PASS] {msg}", "#2ecc71")
