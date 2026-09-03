@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import io
+import re
 import time
 import serial
 import serial.tools.list_ports
@@ -491,6 +492,16 @@ class BurnWorker(QThread):
                     active_lease = (task_path, res_id)
                     raw_data = self._read_minio_binary(task_path, res_id)
                     uid = self.extract_uid(res_id)
+                    try:
+                        uid_val = int(uid, 10)
+                        if not 0 <= uid_val <= 0xFFFFFFFF:
+                            raise ValueError("超出 32 位范围")
+                    except (TypeError, ValueError):
+                        # 资源命名不合法时中止并回移，避免静默烧录 uid=0
+                        self._rollback_lease(active_lease)
+                        self.result_signal.emit(False,
+                            f"资源 {res_id} 文件名不含合法 UID(0~4294967295)，已回移库存并中止")
+                        return
                     cmd = self.protocol.pack_ulpk_command(uid, raw_data)
                     self.log_signal.emit(f"[ULPK] UID={uid}, 帧长={len(cmd)} 字节", "#3498db")
                     self.log_signal.emit(f"[ULPK] HEX: {cmd.hex(' ').upper()}", "#9b59b6")
@@ -635,13 +646,11 @@ class BurnWorker(QThread):
         return True
 
     def extract_uid(self, filename):
-        try:
-            name_part = filename.replace(".json", "").replace(".dat", "").replace(".bin", "")
-            if "-" in name_part:
-                return name_part.split("-")[-1]
-            return name_part
-        except:
-            return "0"
+        """从 ULPK 资源文件名提取 UID 字符串（约定命名: xxx-<UID>.dat）"""
+        name_part = filename.replace(".json", "").replace(".dat", "").replace(".bin", "")
+        if "-" in name_part:
+            return name_part.split("-")[-1]
+        return name_part
 
 
 class SerialReaderThread(QThread):
@@ -911,6 +920,10 @@ class MainWindow(QMainWindow):
         sn = self.manual_sn.text().strip()
         if not sn:
             QMessageBox.warning(self, "提示", "请输入 SN 序列号！")
+            return
+        if not self._validate_sn(sn):
+            QMessageBox.warning(self, "SN 格式错误",
+                f"SN [{sn}] 含非法字符！\n仅允许字母、数字、短横线、下划线，长度 1~32，且不能以符号开头。")
             return
 
         # 检查 SN 是否已使用
@@ -1357,6 +1370,11 @@ class MainWindow(QMainWindow):
         try:
             std_mac = self._normalize_mac(raw_mac)
             mac_base = int(std_mac.replace("-", ""), 16)
+            # 预检 48 位 MAC 地址上限，避免 hex() 生成 13 位非法地址后 zfill 不截断
+            if mac_base + count - 1 > 0xFFFFFFFFFFFF:
+                QMessageBox.warning(self, "范围超限",
+                    f"起始 MAC {std_mac} 加数量 {count} 将超出 48 位地址上限 FF:FF:FF:FF:FF:FF！\n请调整起始值或数量。")
+                return
             success_count = 0
             for i in range(count):
                 new_hex = hex(mac_base + i)[2:].zfill(12).upper()
@@ -1554,6 +1572,10 @@ class MainWindow(QMainWindow):
 
         sn = self.trace_sn_input.text().strip()
         if not sn: return
+        if not self._validate_sn(sn):
+            QMessageBox.warning(self, "SN 格式错误",
+                f"SN [{sn}] 含非法字符！\n仅允许字母、数字、短横线、下划线，长度 1~32，且不能以符号开头。")
+            return
         self.trace_result_table.setRowCount(0)
         self.raw_json_view.clear()
         candidate_paths = [
@@ -1660,6 +1682,11 @@ class MainWindow(QMainWindow):
         self.burn_log.verticalScrollBar().setValue(
             self.burn_log.verticalScrollBar().maximum())
 
+    @staticmethod
+    def _validate_sn(sn):
+        """校验 SN 输入：1~32 位，仅字母/数字/短横线/下划线，避免污染 MinIO 对象名或 ASCII 编码失败"""
+        return bool(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,31}", sn))
+
     def _check_sn_exists(self, sn):
         """检查 SN 是否已有烧录记录"""
         for path in [f"sn_record/{sn}.json", f"sn_record/available/{sn}.json", f"sn_record/used/{sn}.json"]:
@@ -1682,6 +1709,11 @@ class MainWindow(QMainWindow):
         sn = self.sn_input.text().strip()
         if not sn:
             QMessageBox.warning(self, "提醒", "请输入或扫描机器 SN 序列号！")
+            self.sn_input.setFocus()
+            return
+        if not self._validate_sn(sn):
+            QMessageBox.warning(self, "SN 格式错误",
+                f"SN [{sn}] 含非法字符！\n仅允许字母、数字、短横线、下划线，长度 1~32，且不能以符号开头。")
             self.sn_input.setFocus()
             return
 

@@ -153,8 +153,10 @@ class TVSerialProtocol:
         """
         try:
             uid_int = int(uid_str)
-        except Exception:
-            uid_int = 0
+        except (TypeError, ValueError):
+            raise ValueError(f"ULPK UID 非法: {uid_str!r}")
+        if not 0 <= uid_int <= 0xFFFFFFFF:
+            raise ValueError(f"ULPK UID 超出 32 位范围: {uid_int}")
         uid_bytes = struct.pack(">I", uid_int)
         payload = uid_bytes + ulpk_data
         return self.build_command(0xD1, payload)
