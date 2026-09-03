@@ -142,6 +142,97 @@ graph TD
   - 已自动包含 `PyQt6`、`minio`、`pyserial`、`urllib3` 等全部运行时依赖项。
   - 同步更新并将 [config.json](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/dist/config.json) 复制至 `dist/` 交付目录，保证跨电脑免安装即点即用。
 
+### 2026-09-03 (工厂模式可选化与 ACK 应答轮询延时优化)
+
+#### 1. 变更说明
+- **需求背景**：
+  1. 产线部分板卡在烧录前已人工进入工厂模式，或重复烧录时无需重复激活工厂模式，要求将“自动进入工厂模式”改为界面可选配置；
+  2. 烧录耗时较长的 Key（如 ULPK 写 Flash / RPMB）或高波特率通讯下，原有的 ACK 轮询延时较短，易引发假性超时或底层通讯冲突，要求适当延长 `ack_delay`。
+
+#### 2. 修改细节
+- **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+  - `_create_burn_tab()`：在烧录任务选项栏增加 `self.check_auto_factory` 复选框（“自动进入工厂模式”），默认勾选。
+  - `_run_burn()`：获取复选框状态并将 `auto_factory_mode` 传递至 `BurnWorker`。
+  - `BurnWorker`：
+    - `__init__()` 增加 `auto_factory_mode=True` 入参；
+    - `run()` 中通过 `if self.auto_factory_mode:` 条件控制是否发送进入工厂模式指令，若跳过则记录清晰日志；
+    - 针对进入工厂模式指令，`max_retries` 设为 6，`ack_delay` 延长为 0.5 秒；
+    - MAC 与 SN 写入指令的 `ack_delay` 优化延长至 0.6 秒；
+    - ULPK 写入指令的 `ack_delay` 优化延长至 1.5 秒（10 次轮询，总超时宽限至 15 秒）；
+    - HDCP Header 与 Chunk 写入指令的 `ack_delay` 优化延长至 0.5 秒。
+- **[tv_protocol.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/tv_protocol.py)**：
+  - `send_and_wait_ack()`：默认形参 `ack_delay` 由 0.3 秒延长为 0.5 秒；
+  - 在异常捕获分支中引入串口句柄安全关闭与置空机制（`self.ser.close()` + `self.ser = None`），避免 Windows 下失效句柄长期驻留造成后续操作 100% 报 `WriteFile failed`。
+
+#### 3. 验证结果
+### 2026-09-03 (HDCP 与 ULPK 密钥组单选互斥与防呆机制)
+
+#### 1. 变更说明
+- **需求背景**：
+  - 在生产烧录中，单台机器对于 HDCP Key（HDCP 1.4 / 2.2 以及 dev / prod）和 ULPK Key（5586F / 5586L 以及 dev / prod）分别只能烧录其中一种，严禁同时勾选多个；
+  - 需要在 UI 界面层实现动态单选互斥，并在烧录触发前增加双重拦截防呆校验。
+
+#### 2. 修改细节
+- **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+  - `_rebuild_key_checks()`：
+    - 将动态 Key 列表自动归类为 `HDCP 密钥组`、`ULPK 密钥组` 及其他通用组；
+    - 在分组上方加入亮蓝色分类小标头（`▼ HDCP 密钥 (仅限单选):`、`▼ ULPK 密钥 (仅限单选):`），改善视觉引导；
+    - 为每个复选框绑定单选互斥事件槽 `_on_key_check_clicked`。
+  - `_on_key_check_clicked(clicked_kt, checked)`：
+    - 当用户勾选某个 HDCP 时，自动将同组其他已勾选的 HDCP 取消勾选（支持再次点击取消勾选，即支持 0 或 1 项）；
+    - 当用户勾选某个 ULPK 时，自动将同组其他已勾选的 ULPK 取消勾选（支持 0 或 1 项）；
+    - HDCP 与 ULPK 组间相互独立互不干扰。
+  - `_run_burn()`：
+    - 在任务正式装配启动前，增加双重硬防呆拦截：若 HDCP 或 ULPK 选中数量大于 1，立即弹出警告弹窗并终止烧录。
+
+#### 3. 验证结果
+- 使用 `python -m py_compile main.py` 静态编译检查通过，逻辑层与界面层互斥绑定正常。
+
+### 2026-09-03 (烧录面板客户选择下拉框恢复)
+
+#### 1. 变更说明
+- **原因**：此前在增加“自动进入工厂模式”并排布局时，误将 `task_layout.addLayout(client_row)` 覆盖，导致虽然控件已实例化但未添加到界面布局中，表现为烧录面板中的“客户:”选择栏未渲染。
+- **修复**：在 [main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py) 的 `_create_burn_tab()` 中补全 `task_layout.addLayout(client_row)`，界面完整恢复“客户: Vizio / Onn”下拉选择及其联动机制。
+
+#### 2. 全链路影响范围与回归校验 (Regression Test)
+- **协议引擎健壮性**：[tv_protocol.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/tv_protocol.py) 中的 `send_raw` 与 `send_and_wait_ack` 均已加入异常时安全关闭并置空串口句柄机制，彻底杜绝单次通信异常引发的句柄持久死锁。
+- **方案联动与互斥实测**：
+  - `MTK` 平台下 4 款 HDCP 与 4 款 ULPK 均自动形成独立单选组，且支持 HDCP+ULPK 跨组各选其一；
+  - 切换至 `Novatek` 平台自动隐藏 HDCP 分类，仅展示对应客户（Vizio 20M / Onn 30M/40M）的 ULPK 单选组；
+  - 自动化回归测试（包含界面树校验、跨方案联动、组内互斥、跨组共存、协议默认参数）已全部通过（Exit Code 0）。
+
+### 2026-09-03 (默认勾选状态调整：工厂模式与 MAC 默认不选中)
+
+#### 1. 变更说明
+- **需求**：产线烧录面板初始加载时，将“自动进入工厂模式”与“烧录 MAC”调整为默认不选中（`False`），由操作员根据实际工位需求主动勾选。
+- **修改文件**：[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py) 中的 `self.check_auto_factory.setChecked(False)` 与 `self.check_mac.setChecked(False)`。
+- **验证**：静态语法编译通过。
+
+### 2026-09-03 (支持单独烧录 SN 号)
+
+#### 1. 变更说明
+- **需求**：允许操作员仅输入 SN 号并单独执行 SN 烧录，无需勾选任何 MAC 或 Key 任务。
+- **修改细节**：
+  - **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+    - `_create_burn_tab()`：在选项栏中增加 `self.check_sn = QCheckBox("烧录 SN")` 复选框，默认处于勾选状态（`True`）；
+    - `_run_burn()`：放宽任务校验逻辑，只要勾选了“烧录 SN”且输入了有效序列号，即使未选择 MAC / Key 亦允许启动流程；
+    - `BurnWorker`：
+      - 新增 `burn_sn=True` 参数控制是否向板卡发送 SN 写入指令；
+      - 若未勾选其他任务，日志展示为 `--- [方案] 单独烧录 SN 启动: SN {sn} ---`；
+      - 归档记录升级为**增量合并**策略，先尝试读取 `sn_record/{sn}.json` 原有烧录结果再合并写入，防止单独补烧 SN 时覆盖清除先前绑定的 MAC 或 Key 历史。
+### 2026-09-03 (库存查询增加客户筛选与联动)
+
+#### 1. 变更说明
+- **需求**：在“库存查询”Tab 顶部过滤栏中新增“客户”下拉选择，支持按客户维度精确查询库存资源，并与方案及类别下拉框动态联动。
+- **修改细节**：
+  - **[main.py](file:///d:/AI/MyRD_VIZIO_KEY_Genimi/main.py)**：
+    - `_create_view_tab()`：在 `filter_bar` 中新增 `self.view_client_filter = QComboBox()`（包含“全部客户”、“Vizio”、“Onn”）；
+    - `_on_view_client_changed()` / `_on_view_platform_changed()`：支持芯片方案与客户双向联动，动态重组“类别”下拉框中的 MAC 项与 Key 类型列表；
+    - `_refresh_inventory()`：根据选中的客户缩小 MinIO 查询前缀；
+    - `_add_row()`：新增 `sel_client` 过滤参数，精准按客户比对过滤每一行资源记录。
+- **验证结果**：
+  - 静态编译无报错，自动化回归测试覆盖库存查询联动场景全部通过（Exit Code 0）。
+
 
 
 

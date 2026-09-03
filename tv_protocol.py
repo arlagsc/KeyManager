@@ -43,9 +43,15 @@ class TVSerialProtocol:
             success = (b"\x03\x0C\xF1" in res or b"\x03\x0C\xF2" in res)
             return success, res.hex().upper()
         except Exception as e:
+            if self.ser:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self.ser = None
             return False, str(e)
 
-    def send_and_wait_ack(self, data, monitor_signal=None, log_signal=None, max_retries=10, ack_delay=0.3):
+    def send_and_wait_ack(self, data, monitor_signal=None, log_signal=None, max_retries=10, ack_delay=0.5):
         """
         发送并等待 ACK，与 MFC Timer 逐包确认逻辑一致。
         返回 (success, ack_type, raw_hex)
@@ -77,6 +83,12 @@ class TVSerialProtocol:
                     return True, "F2", res.hex().upper()
             return False, None, "TIMEOUT"
         except Exception as e:
+            if self.ser:
+                try:
+                    self.ser.close()
+                except Exception:
+                    pass
+                self.ser = None
             return False, None, str(e)
 
     # ========== 帧构建方法 ==========

@@ -379,7 +379,7 @@ class BurnWorker(QThread):
     log_signal = pyqtSignal(str, str)
     result_signal = pyqtSignal(bool, str)
 
-    def __init__(self, db, protocol, sn, task_list, config, platform="MTK"):
+    def __init__(self, db, protocol, sn, task_list, config, platform="MTK", auto_factory_mode=True, burn_sn=True):
         super().__init__()
         self.db = db
         self.protocol = protocol
@@ -387,6 +387,8 @@ class BurnWorker(QThread):
         self.task_list = task_list
         self.config = config
         self.platform = platform
+        self.auto_factory_mode = auto_factory_mode
+        self.burn_sn = burn_sn
         self.monitor_signal = None
 
     def run(self):
@@ -396,13 +398,27 @@ class BurnWorker(QThread):
                 self.result_signal.emit(False, "网络连接失败：无法连接到MinIO服务器，请检查网络连接。")
                 return
 
-            self.log_signal.emit(f"--- [{self.platform}] 全功能烧录启动: SN {self.sn} ---", "#ffffff")
-            # 进入工厂模式
-            fac_cmd = self.protocol.pack_factory_mode()
-            self.protocol.send_and_wait_ack(fac_cmd, monitor_signal=self.monitor_signal,
-                                            log_signal=self.log_signal,
-                                            max_retries=5, ack_delay=0.3)
-            time.sleep(0.5)
+            if not self.task_list and self.burn_sn:
+                self.log_signal.emit(f"--- [{self.platform}] 单独烧录 SN 启动: SN {self.sn} ---", "#ffffff")
+            else:
+                self.log_signal.emit(f"--- [{self.platform}] 烧录任务启动: SN {self.sn} ---", "#ffffff")
+
+            # 进入工厂模式 (可选)
+            if self.auto_factory_mode:
+                self.log_signal.emit("[工厂模式] 正在发送进入工厂模式指令...", "#3498db")
+                fac_cmd = self.protocol.pack_factory_mode()
+                fac_ok, fac_ack, fac_msg = self.protocol.send_and_wait_ack(
+                    fac_cmd, monitor_signal=self.monitor_signal,
+                    log_signal=self.log_signal,
+                    max_retries=6, ack_delay=0.5)
+                if fac_ok:
+                    self.log_signal.emit(f"[工厂模式] 进入工厂模式成功: ACK={fac_ack}", "#2ecc71")
+                else:
+                    self.log_signal.emit(f"[工厂模式] 进入工厂模式无响应或返回异常 ({fac_msg})，继续执行后续步骤", "#f39c12")
+                time.sleep(0.5)
+            else:
+                self.log_signal.emit("[工厂模式] 已跳过自动进入工厂模式", "#94a3b8")
+
             burn_history = {}
             # 记录待移动的资源: [(task_path, res_id), ...]
             pending_moves = []
@@ -429,7 +445,7 @@ class BurnWorker(QThread):
                     self.log_signal.emit(f"[{mac_label}] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                        max_retries=10, ack_delay=0.5)
+                        max_retries=10, ack_delay=0.6)
                     if not ok:
                         self.log_signal.emit(f"[{mac_label}] 失败详情: ack={ack}, raw={msg}", "#e74c3c")
                     success = ok
@@ -457,7 +473,7 @@ class BurnWorker(QThread):
                     self.log_signal.emit(f"[ULPK] HEX: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                        max_retries=10, ack_delay=1.0)
+                        max_retries=10, ack_delay=1.5)
                     if not ok:
                         self.result_signal.emit(False, f"{cmd_type} ULPK 烧录失败: {msg}")
                         return
@@ -473,29 +489,48 @@ class BurnWorker(QThread):
                 pending_moves.append((task_path, res_id))
                 self.log_signal.emit(f"{cmd_type} 烧录成功 ✅", "#2ecc71")
 
-            # 烧录 SN
-            self.log_signal.emit(f"[SN] 正在写入 SN: {self.sn}", "#3498db")
-            sn_cmd = self.protocol.pack_sn_command(self.sn)
-            self.log_signal.emit(f"[SN] 发送: {sn_cmd.hex(' ').upper()}", "#9b59b6")
-            sn_ok, sn_ack, sn_msg = self.protocol.send_and_wait_ack(
-                sn_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                max_retries=5, ack_delay=0.5)
-            if not sn_ok:
-                self.result_signal.emit(False, f"SN 写入失败: {sn_msg}")
-                return
-            burn_history["SN"] = self.sn
-            self.log_signal.emit("SN 写入成功 ✅", "#2ecc71")
+            # 烧录 SN (可选)
+            if self.burn_sn:
+                self.log_signal.emit(f"[SN] 正在写入 SN: {self.sn}", "#3498db")
+                sn_cmd = self.protocol.pack_sn_command(self.sn)
+                self.log_signal.emit(f"[SN] 发送: {sn_cmd.hex(' ').upper()}", "#9b59b6")
+                sn_ok, sn_ack, sn_msg = self.protocol.send_and_wait_ack(
+                    sn_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
+                    max_retries=6, ack_delay=0.6)
+                if not sn_ok:
+                    self.result_signal.emit(False, f"SN 写入失败: {sn_msg}")
+                    return
+                burn_history["SN"] = self.sn
+                self.log_signal.emit("SN 写入成功 ✅", "#2ecc71")
+            else:
+                self.log_signal.emit("[SN] 已跳过写入 SN", "#94a3b8")
 
             # 全部烧录成功，统一将资源从 available 移到 used
-            self.log_signal.emit("正在标记资源为已使用...", "#f39c12")
-            for task_path, res_id in pending_moves:
-                self.db.move_to_used(task_path, res_id)
+            if pending_moves:
+                self.log_signal.emit("正在标记资源为已使用...", "#f39c12")
+                for task_path, res_id in pending_moves:
+                    self.db.move_to_used(task_path, res_id)
+
+            # 增量合并已有的归档记录，防止单独烧录 SN 覆盖先前的 Key 记录
+            existing_results = {}
+            try:
+                record_path = f"sn_record/{self.sn}.json"
+                old_resp = self.db.client.get_object(self.db.bucket, record_path)
+                old_data = json.load(old_resp)
+                old_resp.close()
+                old_resp.release_conn()
+                if "burn_results" in old_data and isinstance(old_data["burn_results"], dict):
+                    existing_results = old_data["burn_results"]
+            except Exception:
+                pass
+
+            existing_results.update(burn_history)
 
             # 归档烧录记录（包含所属方案信息）
             record_data = json.dumps({
                 "sn": self.sn,
                 "platform": self.platform,
-                "burn_results": burn_history
+                "burn_results": existing_results
             }, ensure_ascii=False).encode('utf-8')
             record_path = f"sn_record/{self.sn}.json"
             self.db.client.put_object(
@@ -538,7 +573,7 @@ class BurnWorker(QThread):
 
         ok, ack, msg = self.protocol.send_and_wait_ack(
             header_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-            max_retries=10, ack_delay=0.3)
+            max_retries=10, ack_delay=0.5)
         if not ok:
             self.result_signal.emit(False, f"{name} Header 失败: {msg}")
             return False
@@ -554,7 +589,7 @@ class BurnWorker(QThread):
             time.sleep(0.1)
             ok, ack, msg = self.protocol.send_and_wait_ack(
                 chunk_cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
-                max_retries=10, ack_delay=0.3)
+                max_retries=10, ack_delay=0.5)
             if not ok:
                 self.result_signal.emit(False, f"{name} 分包 {b_id} 失败: {msg}")
                 return False
@@ -950,9 +985,17 @@ class MainWindow(QMainWindow):
         self.view_platform_filter.currentTextChanged.connect(self._on_view_platform_changed)
         filter_bar.addWidget(self.view_platform_filter)
 
+        # 客户过滤
+        filter_bar.addWidget(QLabel("客户:"))
+        self.view_client_filter = QComboBox()
+        mac_clients = self.config.get("mac_clients", ["Vizio", "Onn"])
+        self.view_client_filter.addItems(["全部客户"] + mac_clients)
+        self.view_client_filter.currentTextChanged.connect(self._on_view_client_changed)
+        filter_bar.addWidget(self.view_client_filter)
+
         filter_bar.addWidget(QLabel("类别:"))
         self.type_filter = QComboBox()
-        self._update_view_type_filter("全部方案")
+        self._update_view_type_filter("全部方案", "全部客户")
         filter_bar.addWidget(self.type_filter)
 
         filter_bar.addWidget(QLabel("状态:"))
@@ -974,18 +1017,40 @@ class MainWindow(QMainWindow):
 
     def _on_view_platform_changed(self, platform_name):
         """库存查询页面切换方案时，更新类别下拉框选项"""
-        self._update_view_type_filter(platform_name)
+        client_name = self.view_client_filter.currentText() if hasattr(self, 'view_client_filter') else "全部客户"
+        self._update_view_type_filter(platform_name, client_name)
 
-    def _update_view_type_filter(self, platform_name):
-        """根据选中的方案更新类别下拉列表"""
+    def _on_view_client_changed(self, client_name):
+        """库存查询页面切换客户时，更新类别下拉框选项"""
+        platform_name = self.view_platform_filter.currentText() if hasattr(self, 'view_platform_filter') else "全部方案"
+        self._update_view_type_filter(platform_name, client_name)
+
+    def _update_view_type_filter(self, platform_name="全部方案", client_name="全部客户"):
+        """根据选中的方案与客户更新类别下拉列表"""
         self.type_filter.clear()
         mac_clients = self.config.get("mac_clients", ["Vizio", "Onn"])
-        mac_items = ["MAC (全部)"] + [f"MAC ({c})" for c in mac_clients]
 
-        if platform_name == "全部方案":
-            self.type_filter.addItems(["全部"] + mac_items + get_platform_key_types(self.config))
+        # 1. 组装 MAC 类别
+        if client_name == "全部客户":
+            mac_items = ["MAC (全部)"] + [f"MAC ({c})" for c in mac_clients]
         else:
-            self.type_filter.addItems([f"全部 ({platform_name})"] + mac_items + get_platform_key_types(self.config, platform_name))
+            mac_items = [f"MAC ({client_name})"]
+
+        # 2. 组装 Key 类别
+        actual_plat = None if platform_name == "全部方案" else platform_name
+        actual_client = None if client_name == "全部客户" else client_name
+        key_list = get_platform_key_types(self.config, actual_plat, actual_client)
+
+        # 3. 组装头部全部选项文本
+        header_text = "全部"
+        if platform_name != "全部方案" and client_name != "全部客户":
+            header_text = f"全部 ({platform_name} - {client_name})"
+        elif platform_name != "全部方案":
+            header_text = f"全部 ({platform_name})"
+        elif client_name != "全部客户":
+            header_text = f"全部 ({client_name})"
+
+        self.type_filter.addItems([header_text] + mac_items + key_list)
 
     # ==================== Tab 3: SN 追溯 ====================
     def _create_trace_tab(self):
@@ -1066,9 +1131,18 @@ class MainWindow(QMainWindow):
         client_row.addStretch()
         task_layout.addLayout(client_row)
 
+        options_row = QHBoxLayout()
+        self.check_auto_factory = QCheckBox("自动进入工厂模式")
+        self.check_auto_factory.setChecked(False)
         self.check_mac = QCheckBox("烧录 MAC")
-        self.check_mac.setChecked(True)
-        task_layout.addWidget(self.check_mac)
+        self.check_mac.setChecked(False)
+        self.check_sn = QCheckBox("烧录 SN")
+        self.check_sn.setChecked(True)
+        options_row.addWidget(self.check_auto_factory)
+        options_row.addWidget(self.check_mac)
+        options_row.addWidget(self.check_sn)
+        options_row.addStretch()
+        task_layout.addLayout(options_row)
 
         # 动态 Key 勾选容器
         self.key_checks_container = QWidget()
@@ -1158,10 +1232,12 @@ class MainWindow(QMainWindow):
         self._rebuild_key_checks()
 
     def _rebuild_key_checks(self, platform_name=None):
-        """根据指定的芯片方案与客户动态生成对应的 Key 复选框"""
-        for cb in self.key_checks.values():
-            cb.setParent(None)
-            cb.deleteLater()
+        """根据指定的芯片方案与客户动态生成对应的 Key 复选框，并应用 HDCP / ULPK 单选互斥规则"""
+        while self.key_checks_layout.count():
+            item = self.key_checks_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
         self.key_checks.clear()
 
         if platform_name is None or not isinstance(platform_name, str):
@@ -1169,10 +1245,53 @@ class MainWindow(QMainWindow):
         client_name = self.client_combo.currentText() if hasattr(self, 'client_combo') else None
 
         key_list = get_platform_key_types(self.config, platform_name, client_name)
-        for kt in key_list:
+
+        hdcp_keys = [kt for kt in key_list if "HDCP" in kt.upper()]
+        ulpk_keys = [kt for kt in key_list if "ULPK" in kt.upper()]
+        other_keys = [kt for kt in key_list if "HDCP" not in kt.upper() and "ULPK" not in kt.upper()]
+
+        def add_key_cb(kt):
             cb = QCheckBox(f"烧录 {kt}")
+            cb.clicked.connect(lambda chk, k=kt: self._on_key_check_clicked(k, chk))
             self.key_checks[kt] = cb
             self.key_checks_layout.addWidget(cb)
+
+        if hdcp_keys:
+            lbl_hdcp = QLabel("<span style='color: #38bdf8; font-size: 12px; font-weight: bold;'>▼ HDCP 密钥 (仅限单选):</span>")
+            self.key_checks_layout.addWidget(lbl_hdcp)
+            for kt in hdcp_keys:
+                add_key_cb(kt)
+
+        if ulpk_keys:
+            if hdcp_keys:
+                self.key_checks_layout.addSpacing(6)
+            lbl_ulpk = QLabel("<span style='color: #38bdf8; font-size: 12px; font-weight: bold;'>▼ ULPK 密钥 (仅限单选):</span>")
+            self.key_checks_layout.addWidget(lbl_ulpk)
+            for kt in ulpk_keys:
+                add_key_cb(kt)
+
+        if other_keys:
+            if hdcp_keys or ulpk_keys:
+                self.key_checks_layout.addSpacing(6)
+            for kt in other_keys:
+                add_key_cb(kt)
+
+    def _on_key_check_clicked(self, clicked_kt: str, checked: bool):
+        """HDCP 与 ULPK 组内分别互斥单选控制"""
+        if not checked:
+            return
+
+        kt_upper = clicked_kt.upper()
+        if "HDCP" in kt_upper:
+            # 取消其他所有 HDCP 的勾选
+            for kt, cb in self.key_checks.items():
+                if kt != clicked_kt and "HDCP" in kt.upper() and cb.isChecked():
+                    cb.setChecked(False)
+        elif "ULPK" in kt_upper:
+            # 取消其他所有 ULPK 的勾选
+            for kt, cb in self.key_checks.items():
+                if kt != clicked_kt and "ULPK" in kt.upper() and cb.isChecked():
+                    cb.setChecked(False)
 
     # ==================== 资源导入逻辑 ====================
     def _normalize_mac(self, mac_str):
@@ -1300,21 +1419,30 @@ class MainWindow(QMainWindow):
 
         self.table.setRowCount(0)
         sel_platform = self.view_platform_filter.currentText()
+        sel_client = self.view_client_filter.currentText() if hasattr(self, 'view_client_filter') else "全部客户"
         sel_type = self.type_filter.currentText()
         sel_stat = self.status_filter.currentText()
 
         prefixes = []
         if sel_type == "全部" or sel_type.startswith("全部 ("):
             if sel_platform == "全部方案":
-                prefixes = ["mac/", "key/"]
+                if sel_client == "全部客户":
+                    prefixes = ["mac/", "key/"]
+                else:
+                    c_lower = sel_client.lower()
+                    prefixes = [f"mac/{c_lower}/", "key/"]
             else:
-                plat_keys = get_platform_key_types(self.config, sel_platform)
-                prefixes = [f"key/{kt}/" for kt in plat_keys] + ["mac/"]
+                plat_keys = get_platform_key_types(self.config, sel_platform, None if sel_client == "全部客户" else sel_client)
+                if sel_client == "全部客户":
+                    prefixes = [f"key/{kt}/" for kt in plat_keys] + ["mac/"]
+                else:
+                    c_lower = sel_client.lower()
+                    prefixes = [f"key/{kt}/" for kt in plat_keys] + [f"mac/{c_lower}/"]
         elif sel_type == "MAC (全部)":
             prefixes = ["mac/"]
         elif sel_type.startswith("MAC ("):
-            client_name = sel_type.replace("MAC (", "").replace(")", "").strip().lower()
-            prefixes = [f"mac/{client_name}/"]
+            c_name = sel_type.replace("MAC (", "").replace(")", "").strip().lower()
+            prefixes = [f"mac/{c_name}/"]
         else:
             prefixes = [f"key/{sel_type}/"]
 
@@ -1328,10 +1456,10 @@ class MainWindow(QMainWindow):
                 objs = self.db.client.list_objects(self.db.bucket, prefix=p, recursive=True)
                 for obj in objs:
                     if any(f"/{kw}/" in obj.object_name for kw in stat_keywords):
-                        self._add_row(obj.object_name, sel_platform)
+                        self._add_row(obj.object_name, sel_platform, sel_client)
             except: continue
 
-    def _add_row(self, path, sel_platform="全部方案"):
+    def _add_row(self, path, sel_platform="全部方案", sel_client="全部客户"):
         parts = path.split('/')
         if len(parts) < 3: return
 
@@ -1357,6 +1485,11 @@ class MainWindow(QMainWindow):
         # 若选择了特定方案且当前项为 Key，过滤掉不属于该方案的项
         if sel_platform != "全部方案" and platform != "通用" and platform != sel_platform:
             return
+
+        # 若选择了特定客户，过滤掉不属于该客户的项
+        if sel_client != "全部客户":
+            if not client or client.upper() != sel_client.upper():
+                return
 
         row = self.table.rowCount()
         self.table.insertRow(row)
@@ -1503,7 +1636,19 @@ class MainWindow(QMainWindow):
             if ret != QMessageBox.StandardButton.Yes:
                 return
 
+        # 防呆校验：HDCP 与 ULPK 只能各自最多勾选一项
+        hdcp_selected = [kt for kt, cb in self.key_checks.items() if cb.isChecked() and "HDCP" in kt.upper()]
+        if len(hdcp_selected) > 1:
+            QMessageBox.warning(self, "选择冲突", f"HDCP 密钥只能选择其一，当前选中了 {len(hdcp_selected)} 项：\n" + "、".join(hdcp_selected))
+            return
+
+        ulpk_selected = [kt for kt, cb in self.key_checks.items() if cb.isChecked() and "ULPK" in kt.upper()]
+        if len(ulpk_selected) > 1:
+            QMessageBox.warning(self, "选择冲突", f"ULPK 密钥只能选择其一，当前选中了 {len(ulpk_selected)} 项：\n" + "、".join(ulpk_selected))
+            return
+
         client_name = self.client_combo.currentText().strip().lower()
+        burn_sn = self.check_sn.isChecked()
         tasks = []
         if self.check_mac.isChecked():
             tasks.append(f"mac/{client_name}")
@@ -1513,8 +1658,9 @@ class MainWindow(QMainWindow):
                     tasks.append(f"key/{kt}/{client_name}")
                 else:
                     tasks.append(f"key/{kt}")
-        if not tasks:
-            QMessageBox.warning(self, "任务错误", "请至少勾选一项要烧录的内容！")
+
+        if not tasks and not burn_sn:
+            QMessageBox.warning(self, "任务错误", "请至少勾选一项要烧录的内容（MAC / Key / SN）！")
             return
 
         self.btn_start.setEnabled(False)
@@ -1527,7 +1673,8 @@ class MainWindow(QMainWindow):
 
         self.protocol.port = current_port
         platform = self.burn_platform_combo.currentText().strip()
-        self.worker = BurnWorker(self.db, self.protocol, sn, tasks, self.config, platform=platform)
+        auto_factory = self.check_auto_factory.isChecked()
+        self.worker = BurnWorker(self.db, self.protocol, sn, tasks, self.config, platform=platform, auto_factory_mode=auto_factory, burn_sn=burn_sn)
         self.worker.monitor_signal = self.monitor_data_signal
         self.worker.log_signal.connect(self._burn_log)
         self.worker.result_signal.connect(self._on_burn_finished)
