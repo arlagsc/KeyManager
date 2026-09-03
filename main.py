@@ -420,8 +420,8 @@ class BurnWorker(QThread):
                 self.log_signal.emit("[工厂模式] 已跳过自动进入工厂模式", "#94a3b8")
 
             burn_history = {}
-            # 记录待移动的资源: [(task_path, res_id), ...]
-            pending_moves = []
+            # 当前已锁定(移入 used)但尚未确认烧录成功的资源 (task_path, res_id)，失败/异常时回移 available
+            active_lease = None
             success = False
 
             for task_path in self.task_list:
@@ -433,14 +433,16 @@ class BurnWorker(QThread):
                     cmd_type = parts[1]   # 如 "ULPK 5586L prod" 或 "ULPK NTK prod"
                 else:
                     cmd_type = parts[1] if len(parts) >= 2 else parts[-1]
+                fail_reason = None
 
                 if task_path.startswith("mac/"):
-                    res_id = self.db.peek_available(task_path)
+                    res_id = self.db.lease_resource(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
+                    active_lease = (task_path, res_id)
                     mac_label = f"MAC({cmd_type})"
-                    self.log_signal.emit(f"[{mac_label}] 资源: {res_id}", "#3498db")
+                    self.log_signal.emit(f"[{mac_label}] 已锁定资源: {res_id}", "#3498db")
                     cmd = self.protocol.pack_mac_command(res_id)
                     self.log_signal.emit(f"[{mac_label}] 发送: {cmd.hex(' ').upper()}", "#9b59b6")
                     ok, ack, msg = self.protocol.send_and_wait_ack(
@@ -449,23 +451,26 @@ class BurnWorker(QThread):
                     if not ok:
                         self.log_signal.emit(f"[{mac_label}] 失败详情: ack={ack}, raw={msg}", "#e74c3c")
                     success = ok
+                    fail_reason = f"{cmd_type} 烧录失败" if not success else None
 
                 elif "HDCP" in cmd_type.upper():
-                    res_id = self.db.peek_available(task_path)
+                    res_id = self.db.lease_resource(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
+                    active_lease = (task_path, res_id)
                     raw_data = self._read_minio_binary(task_path, res_id)
                     hdcp_type = 0xE3 if "1.4" in cmd_type else 0xE4
                     success = self.process_hdcp_burn(cmd_type, hdcp_type, raw_data)
-                    if not success:
-                        return
+                    # process_hdcp_burn 内部已 emit 具体失败原因，此处不重复 emit
+                    fail_reason = None
 
                 elif "ULPK" in cmd_type.upper():
-                    res_id = self.db.peek_available(task_path)
+                    res_id = self.db.lease_resource(task_path)
                     if not res_id:
                         self.result_signal.emit(False, f"库存空: {task_path}")
                         return
+                    active_lease = (task_path, res_id)
                     raw_data = self._read_minio_binary(task_path, res_id)
                     uid = self.extract_uid(res_id)
                     cmd = self.protocol.pack_ulpk_command(uid, raw_data)
@@ -474,19 +479,21 @@ class BurnWorker(QThread):
                     ok, ack, msg = self.protocol.send_and_wait_ack(
                         cmd, monitor_signal=self.monitor_signal, log_signal=self.log_signal,
                         max_retries=10, ack_delay=1.5)
-                    if not ok:
-                        self.result_signal.emit(False, f"{cmd_type} ULPK 烧录失败: {msg}")
-                        return
-                    success = True
+                    success = ok
+                    fail_reason = f"{cmd_type} ULPK 烧录失败: {msg}" if not success else None
+
                 else:
                     self.log_signal.emit(f"未知任务类型: {cmd_type}", "#e74c3c")
                     continue
 
                 if not success:
-                    self.result_signal.emit(False, f"{cmd_type} 烧录失败")
+                    # 烧录失败：把已锁定但未成功烧录的资源回移 available，避免库存被吞或重复分配
+                    self._rollback_lease(active_lease)
+                    if fail_reason:
+                        self.result_signal.emit(False, fail_reason)
                     return
+                active_lease = None
                 burn_history[cmd_type] = res_id
-                pending_moves.append((task_path, res_id))
                 self.log_signal.emit(f"{cmd_type} 烧录成功 ✅", "#2ecc71")
 
             # 烧录 SN (可选)
@@ -505,11 +512,8 @@ class BurnWorker(QThread):
             else:
                 self.log_signal.emit("[SN] 已跳过写入 SN", "#94a3b8")
 
-            # 全部烧录成功，统一将资源从 available 移到 used
-            if pending_moves:
-                self.log_signal.emit("正在标记资源为已使用...", "#f39c12")
-                for task_path, res_id in pending_moves:
-                    self.db.move_to_used(task_path, res_id)
+            # 各资源在烧录成功时已即时移入 used（先锁定后烧录），无需再批量移动；
+            # 中途失败的资源已通过 _rollback_lease 回移 available。
 
             # 增量合并已有的归档记录，防止单独烧录 SN 覆盖先前的 Key 记录
             existing_results = {}
@@ -540,7 +544,22 @@ class BurnWorker(QThread):
             )
             self.result_signal.emit(True, "所有任务已完成")
         except Exception as e:
+            # 出现致命异常时，回移仍持有但未成功烧录的资源，避免库存泄漏
+            self._rollback_lease(active_lease)
             self.result_signal.emit(False, f"致命错误: {str(e)}")
+
+    def _rollback_lease(self, lease):
+        """烧录失败/异常时，把已锁定(移入 used)但未成功烧录的资源回移到 available"""
+        if not lease:
+            return
+        task_path, res_id = lease
+        try:
+            if self.db.restore_available(task_path, res_id):
+                self.log_signal.emit(f"[释放] 资源 {res_id} 已回移 available", "#f39c12")
+            else:
+                self.log_signal.emit(f"[警告] 资源 {res_id} 回移失败，请人工核查库存", "#e74c3c")
+        except Exception as e:
+            self.log_signal.emit(f"[警告] 资源 {res_id} 回移异常: {e}", "#e74c3c")
 
     def _read_minio_binary(self, task_path, res_id):
         response = self.db.client.get_object(self.db.bucket, f"{task_path}/available/{res_id}")

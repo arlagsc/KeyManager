@@ -74,24 +74,42 @@ class MinioWarehouse:
         )
         return True, "上传成功"
 
-    def fetch_and_lock(self, res_type):
-        """从 available 移动到 used（兼容旧调用）"""
+    def lease_resource(self, res_type):
+        """锁定领取一个 available 资源：将其移入 used 并返回文件名。
+
+        先锁定后烧录，可将并发双领窗口缩小到 copy+remove 之间；
+        以 remove 成功作为锁定判定：remove 失败视为未锁定，回滚本工位刚写入的
+        used 副本并尝试下一个候选。多个烧录工位共享仓库时，仍建议后续引入
+        分布式锁或 MinIO 条件拷贝(If-None-Match)进一步保证互斥。
+        """
         self._ensure_bucket()
         res_type = res_type.lower()
         prefix = f"{res_type}/available/"
-        objects = self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
+        try:
+            objects = self.client.list_objects(self.bucket, prefix=prefix, recursive=True)
+        except Exception as e:
+            print(f"列举资源失败: {e}")
+            return None
         for obj in objects:
-            old_path = obj.object_name
-            val = os.path.basename(old_path)
-            new_path = f"{res_type}/used/{val}"
+            filename = os.path.basename(obj.object_name)
+            src = f"{res_type}/available/{filename}"
+            dst = f"{res_type}/used/{filename}"
             try:
-                source = CopySource(self.bucket, old_path)
-                self.client.copy_object(self.bucket, new_path, source)
-                self.client.remove_object(self.bucket, old_path)
-                return val
+                source = CopySource(self.bucket, src)
+                self.client.copy_object(self.bucket, dst, source)
+                try:
+                    self.client.remove_object(self.bucket, src)
+                    return filename
+                except Exception as e:
+                    # 源未移除成功：网络抖动或被并发工位抢先移除，回滚本工位刚写入的副本
+                    print(f"锁定 {filename} 的源移除失败: {e}")
+                    try:
+                        self.client.remove_object(self.bucket, dst)
+                    except Exception:
+                        pass
             except Exception as e:
-                print(f"锁定资源失败: {e}")
-                continue
+                # copy 失败(通常源已被其他工位移走)，继续尝试下一个候选
+                print(f"锁定资源 {filename} 失败: {e}")
         return None
 
     def peek_available(self, res_type):
@@ -117,4 +135,19 @@ class MinioWarehouse:
             return True
         except Exception as e:
             print(f"移动资源失败: {e}")
+            return False
+
+    def restore_available(self, res_type, filename):
+        """烧录失败补偿：将已锁定(used)的资源回移到 available"""
+        self._ensure_bucket()
+        res_type = res_type.lower()
+        src = f"{res_type}/used/{filename}"
+        dst = f"{res_type}/available/{filename}"
+        try:
+            source = CopySource(self.bucket, src)
+            self.client.copy_object(self.bucket, dst, source)
+            self.client.remove_object(self.bucket, src)
+            return True
+        except Exception as e:
+            print(f"回移资源失败: {e}")
             return False
